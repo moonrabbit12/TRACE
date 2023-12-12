@@ -22,7 +22,8 @@ Method2Class = {"PP":PP,
                 "LFPT5":LFPT5, 
                 "O-LoRA":O_LoRA,
                 "base":CL_Base_Model,
-                "lora":lora}
+                "lora":lora,
+                "SVD":CL_Base_Model}
 
 AllDatasetName = ["C-STANCE","FOMC","MeetingBank","Papyrus-f","Py150","ScienceQA","ToolBench","NumGLUE-cm","NumGLUE-ds","20Minuten"]
 

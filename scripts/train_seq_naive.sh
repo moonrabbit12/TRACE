@@ -1,7 +1,7 @@
 #!bin/bash
 port=$(shuf -i25000-30000 -n1)
 deepspeed --include=localhost:0,1,2,3,4,5,6,7 --master_port $port training/main.py  \
-    --data_path /mnt/data/user/zhang_yuansen/LLM-CL_Benchmark \
+    --data_path /home/joon/TRACE/TRACE-Benchmark/LLM-CL-Benchmark_5000 \
     --dataset_name C-STANCE,FOMC,MeetingBank,Py150,ScienceQA,NumGLUE-cm,NumGLUE-ds,20Minuten \
     --model_name_or_path /mnt/data/user/zhang_yuansen/PTMs/llama-2-7b-chat \
     --per_device_train_batch_size 4 \

@@ -38,7 +38,7 @@ from utils.data.data_collator import DataCollator
 from utils.utils import print_rank_0, to_device, save_hf_format, set_random_seed, get_all_reduce_mean, get_optimizer_grouped_parameters, save_zero_three_model, load_hf_tokenizer
 from utils.ds_utils import get_train_ds_config
 from utils.module.lora import convert_linear_layer_to_lora, convert_lora_to_linear_layer, only_optimize_lora_parameters
-from utils.model.model_utils import create_hf_model
+from utils.model.model_utils import create_hf_model, get_latent_directions
 
 # add flash attention
 from utils.flash_attention.llama_flash_att import replace_llama_attn_with_flash_attn
@@ -54,6 +54,8 @@ from model.Dynamic_network.L2P import convert_L2P_model
 
 
 from params import Method2Class, AllDatasetName
+
+from model.CustomLlamaForCausalLM import CustomLlamaForCausalLM
 
 
 # TODO, check support for OPT and llama
@@ -206,8 +208,10 @@ def main():
     args = parse_args()
 
     if args.local_rank == -1:
+        print(args.local_rank)
         device = torch.device("cuda")
     else:
+        print(args.local_rank)
         torch.cuda.set_device(args.local_rank)
         device = torch.device("cuda", args.local_rank)
         # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
@@ -237,14 +241,23 @@ def main():
     # default the LLM is decoder only model, so padding side is left
     assert tokenizer.padding_side == 'left'
     assert tokenizer.truncation_side == "left"
+    if 'vicuna' in args.model_name_or_path and args.CL_method == 'SVD':
+        model = create_hf_model(CustomLlamaForCausalLM,
+                                args.model_name_or_path,
+                                tokenizer,
+                                ds_config=ds_config,
+                                disable_dropout=args.disable_dropout
+                                )
+        repurposed_dims_size = 100
+        projection_configs = generate_basis_pipeline(model, repurposed_dims_size)
 
-    model = create_hf_model(AutoModelForCausalLM,
-                            args.model_name_or_path,
-                            tokenizer,
-                            ds_config=ds_config,
-                            disable_dropout=args.disable_dropout
-                            )
-    
+    else:
+        model = create_hf_model(AutoModelForCausalLM,
+                                args.model_name_or_path,
+                                tokenizer,
+                                ds_config=ds_config,
+                                disable_dropout=args.disable_dropout
+                                )
     # some CL methods can be realized by peft
     if args.CL_method == "LFPT5":
         from utils.my_peft import get_peft_model, PromptTuningInit, PromptTuningConfig, LoraConfig, TaskType
