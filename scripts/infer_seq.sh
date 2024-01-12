@@ -11,4 +11,4 @@ deepspeed --include=localhost:0 --master_port $port inference/infer_single.py  \
     --seed 1234 \
     --deepspeed \
     --CL_method base \
-    --inference_output_path /mnt/data/user/zhang_yuansen/outputs_LLM-CL/naive/predictions > /mnt/data/user/zhang_yuansen/outputs_LLM-CL/naive/infer.log 2>&1 &
+    --inference_output_path /mnt/data1/joon/outputs/cl/svd/vicuna7b > /mnt/data1/joon/outputs/cl/svd/vicuna7b/infer.log 2>&1 &

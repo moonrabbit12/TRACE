@@ -34,10 +34,9 @@ def create_hf_model(model_class,
         model_name_or_path,
         from_tf=bool(".ckpt" in model_name_or_path),
         config=model_config,
-        trust_remote_code=True)
-    print('yoooooooooooo')
-    print(model)
-    print('yoooooooooooo')
+        trust_remote_code=True,
+        resume_download=True)
+
     # llama use eos_token_id but not end_token_id
     model.config.end_token_id = tokenizer.eos_token_id
     # compatible with OPT and llama2
@@ -46,14 +45,14 @@ def create_hf_model(model_class,
 
     return model
 
-def get_latent_directions_module(layer):
+def get_latent_directions_module(module):
     # TODO: this does not support mixed precision
     # RuntimeError: "svd_cuda_gesvdj" not implemented for 'BFloat16'
     # 
     #print(layer)
     # TODO: implement mixed precision check
-    tensor_float = layer.weight.data.to(torch.float32)
-    U, S, VH = torch.linalg.svd(tensor_float)
+    #tensor_float = layer.weight.data.to(torch.float32)
+    U, S, VH = torch.linalg.svd(module)
     VH = VH.to(torch.bfloat16)
     return VH
 
@@ -103,6 +102,10 @@ def project_to_subspaces(input_tensor: torch.Tensor, basis: torch.Tensor,
         base_dims = torch.tensor([x for x in range(hidden_size) if x not in repurposed_dims])
 
     # Use values instead of boolean to change order as needed
+    #print('basis shape', basis.shape)
+    #print('repurposed dimensions', repurposed_dims)
+    #print('repurposed dimensions shape', repurposed_dims.shape)
+    
     repurposed_directions = basis[:, repurposed_dims].to(input_tensor.device)
     base_directions = basis[:, base_dims].to(input_tensor.device)
 
@@ -153,13 +156,20 @@ def projection_pipeline(input_tensor, layer):
 def generate_basis_pipeline(model, repurposed_dims_size):
     gate_proj_bases = []
     up_proj_bases = []
-    repurposed_dims = torch.arange(hidden_size - repurposed_dims_size, hidden_size)
-    
-    for name, param in model.named_parameters():
-        if (name == 'gate_proj'):
-            gate_proj_bases.append(get_latent_directions_module(param.weight.data))
-        elif name == 'up_proj':
-            up_proj_bases.append(get_latent_directions_module(param.weight.data))
-        
+    repurposed_dims_list = []
+    for name, param in model.model.layers.named_parameters():
+        if 'gate_proj' in name:
+            print(name)
+            print(param.shape)
+            gate_proj_bases.append(get_latent_directions_module(param))
+            hidden_size = param.shape[1]
+            repurposed_dims_list.append(torch.arange(hidden_size - repurposed_dims_size, hidden_size))
 
-    return (gate_proj_bases, up_proj_bases, repurposed_dims)
+        elif 'up_proj' in name:
+            print(name)
+            print(param.shape)
+            up_proj_bases.append(get_latent_directions_module(param))
+            hidden_size = param.shape[1]
+            repurposed_dims_list.append(torch.arange(hidden_size - repurposed_dims_size, hidden_size))
+
+    return (gate_proj_bases, up_proj_bases, repurposed_dims_list)

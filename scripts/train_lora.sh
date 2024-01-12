@@ -1,6 +1,6 @@
 #!bin/bash
 port=$(shuf -i25000-30000 -n1)
-deepspeed --include=localhost:2,3 --master_port $port training/main.py \
+deepspeed --include=localhost:2,3,4,5 --master_port $port training/main.py \
    --data_path /home/joon/TRACE/TRACE-Benchmark/LLM-CL-Benchmark_5000 \
    --dataset_name C-STANCE,FOMC,MeetingBank,Py150,ScienceQA,NumGLUE-cm,NumGLUE-ds,20Minuten \
    --model_name_or_path lmsys/vicuna-7b-v1.3 \

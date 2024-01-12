@@ -6,6 +6,8 @@
 import sys
 sys.dont_write_bytecode = True
 
+import pickle
+
 import argparse
 import os
 import math
@@ -38,7 +40,7 @@ from utils.data.data_collator import DataCollator
 from utils.utils import print_rank_0, to_device, save_hf_format, set_random_seed, get_all_reduce_mean, get_optimizer_grouped_parameters, save_zero_three_model, load_hf_tokenizer
 from utils.ds_utils import get_train_ds_config
 from utils.module.lora import convert_linear_layer_to_lora, convert_lora_to_linear_layer, only_optimize_lora_parameters
-from utils.model.model_utils import create_hf_model, get_latent_directions
+from utils.model.model_utils import create_hf_model, get_latent_directions, generate_basis_pipeline
 
 # add flash attention
 from utils.flash_attention.llama_flash_att import replace_llama_attn_with_flash_attn
@@ -249,8 +251,26 @@ def main():
                                 disable_dropout=args.disable_dropout
                                 )
         repurposed_dims_size = 100
-        projection_configs = generate_basis_pipeline(model, repurposed_dims_size)
+        projection_configs = None
+        PROJ_CONFIG_PATH = 'proj_config.pkl'
+        if not os.path.exists(PROJ_CONFIG_PATH):
+            projection_configs = generate_basis_pipeline(model, repurposed_dims_size)
+            with open(PROJ_CONFIG_PATH, 'wb') as f:
+                pickle.dump(projection_configs, f)
+            print("projection configs has been pickled and saved to disk.")
+        else:
+            with open(PROJ_CONFIG_PATH, 'rb') as f:
+                projection_configs = pickle.load(f)
+            print("projection configs has been loaded from disk.")
 
+        print(projection_configs)
+    elif 'vicuna' in args.model_name_or_path and args.CL_method != 'SVD':
+        model = create_hf_model(LlamaForCausalLM,
+                                args.model_name_or_path,
+                                tokenizer,
+                                ds_config=ds_config,
+                                disable_dropout=args.disable_dropout
+                                )
     else:
         model = create_hf_model(AutoModelForCausalLM,
                                 args.model_name_or_path,
@@ -446,7 +466,16 @@ def main():
             for name, params in model.named_parameters():
                 if "prompt" not in name:
                     params.requires_grad=False
-                    
+
+
+    #if 'vicuna' in args.model_name_or_path and args.CL_method == 'SVD':
+    #    repurposed_dims_size = 100
+    #    projection_configs = generate_basis_pipeline(model, repurposed_dims_size)
+    #    print(projection_configs)
+
+    if args.gradient_checkpointing:
+        model.gradient_checkpointing_enable()
+
     optimizer, lr_scheduler = get_optimizer(model)
     model, optimizer, _, lr_scheduler = deepspeed.initialize(
         model=model,
@@ -454,10 +483,11 @@ def main():
         args=args,
         config=ds_config,
         lr_scheduler=lr_scheduler,
-        dist_init_required=True)
+        dist_init_required=True,
+        model_parameters=model.parameters())
 
-    if args.gradient_checkpointing:
-        model.gradient_checkpointing_enable()
+
+
 
     # Train!
     print_rank_0("***** Running training *****", args.global_rank)
@@ -467,9 +497,21 @@ def main():
     # perplexity = evaluation(model, eval_dataloader)
     # print_rank_0(f"ppl: {perplexity}", args.global_rank)
 
-    # Initialize the global progress bar
+    device = model.device  # Get the device from DeepSpeed model engine
 
-    if args.CL_method in Method2Class.keys():
+    # Assuming projection_configs is a tuple of lists of tensors
+    if args.CL_method == 'SVD':
+        projection_configs = tuple(
+            [tensor.to(device) for tensor in config_list] for config_list in projection_configs
+        )
+
+    # Now projection_configs_updated contains tensors that are all on the same device as the model
+
+    #projection_configs = None
+    if args.CL_method in Method2Class.keys() and args.CL_method == 'SVD' :
+        CL_Trainer = Method2Class[args.CL_method](model, tokenizer, optimizer, train_task_list, eval_task_list, test_task_list, args)
+        CL_Trainer.train_continual_projection(projection_configs)
+    else:
         CL_Trainer = Method2Class[args.CL_method](model, tokenizer, optimizer, train_task_list, eval_task_list, test_task_list, args)
         CL_Trainer.train_continual()
 

@@ -60,7 +60,6 @@ class CL_Base_Model:
             pass
         return perplexity
 
-
     def train_one_task(self, task, i_task, epochs):
         # 在单独某个任务上训练
         if self.args.local_rank == -1:
@@ -104,13 +103,61 @@ class CL_Base_Model:
             # perplexity = self.perplexity_evaluation(eval_dataloader, device)
             # print_rank_0(f"ppl: {perplexity}", self.args.global_rank)
             # self.model.tput_timer.update_epoch_count()
+
+    def train_one_task_projection(self, task, i_task, epochs, projection_configs):
+        # 在单独某个任务上训练
+        if self.args.local_rank == -1:
+            device = torch.device("cuda")
+        else:
+            torch.cuda.set_device(self.args.local_rank)
+            device = torch.device("cuda", self.args.local_rank)
+        
+        #### TRAIN ####
+        train_dataloader = self.train_task_list[task]
+        eval_dataloader = self.eval_task_list[task]
+        total_steps = epochs * len(train_dataloader)
+        progress_bar = tqdm(total=total_steps, leave=True, disable=(self.args.global_rank != 0))
+        for epoch in range(epochs):
+            print_rank_0(
+                f"Beginning of Epoch {epoch+1}/{epochs}, Total Micro Batches {len(train_dataloader)}",
+                self.args.global_rank)
+            self.model.train()
+
+            for step, batch in enumerate(train_dataloader):
+                del batch['sources']
+                batch = to_device(batch, device)
+                outputs = self.model(**batch, projection_configs=projection_configs, use_cache=False)
+                loss = outputs.loss
+                # Update the description to include current step and loss, if needed
+                if self.args.global_rank == 0:
+                    # Update the progress bar
+                    progress_bar.update(1)
+                    description = f"Epoch {epoch+1}, Step {step}, Loss: {loss.item():.4f}"
+                    progress_bar.set_description(description, refresh=False)
+
+                self.model.backward(loss)
+                # Correct gradient accumulation steps are handled withing the deepspeed engine's backward call.
+                self.model.step()
+
+
+            # Evaluate perplexity on the validation set.
+            # print_rank_0(
+            #     f"***** Evaluating perplexity, Epoch {epoch+1}/{epochs} *****",
+            #     self.args.global_rank)
+            # perplexity = self.perplexity_evaluation(eval_dataloader, device)
+            # print_rank_0(f"ppl: {perplexity}", self.args.global_rank)
+            # self.model.tput_timer.update_epoch_count()
     
     
+    def train_continual_projection(self, projection_configs):
+        for i_task, task in enumerate(self.train_task_list):
+            self.train_one_task_projection(task, i_task, int(self.args.num_train_epochs[i_task]), projection_configs)
+            self.save_model(i_task)
+
     def train_continual(self):
         for i_task, task in enumerate(self.train_task_list):
             self.train_one_task(task, i_task, int(self.args.num_train_epochs[i_task]))
             self.save_model(i_task)
-
     
     def save_model(self, round):
         if self.args.output_dir is not None:
