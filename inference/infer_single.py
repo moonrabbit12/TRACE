@@ -51,6 +51,9 @@ from model.Replay.LFPT5 import getInitialPrompt
 from model.Dynamic_network.PP import PP, convert_PP_model
 from model.Dynamic_network.L2P import convert_L2P_model
 
+from model.CustomLlamaForCausalLM import CustomLlamaForCausalLM
+
+
 # dist.init_process_group(backend='nccl')
 
 

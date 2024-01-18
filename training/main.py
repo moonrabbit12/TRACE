@@ -40,7 +40,7 @@ from utils.data.data_collator import DataCollator
 from utils.utils import print_rank_0, to_device, save_hf_format, set_random_seed, get_all_reduce_mean, get_optimizer_grouped_parameters, save_zero_three_model, load_hf_tokenizer
 from utils.ds_utils import get_train_ds_config
 from utils.module.lora import convert_linear_layer_to_lora, convert_lora_to_linear_layer, only_optimize_lora_parameters
-from utils.model.model_utils import create_hf_model, get_latent_directions, generate_basis_pipeline
+from utils.model.model_utils import create_hf_model, get_latent_directions, generate_basis_pipeline, generate_basis_for_opt
 
 # add flash attention
 from utils.flash_attention.llama_flash_att import replace_llama_attn_with_flash_attn
@@ -58,7 +58,7 @@ from model.Dynamic_network.L2P import convert_L2P_model
 from params import Method2Class, AllDatasetName
 
 from model.CustomLlamaForCausalLM import CustomLlamaForCausalLM
-
+from model.CustomOPTForCausalLM import CustomOPTForCausalLM
 
 # TODO, check support for OPT and llama
 
@@ -199,6 +199,9 @@ def parse_args():
     parser.add_argument('--CL_method',
                 default=None,
                 help='continual learning method used')
+    parser.add_argument('--model',
+                        default=None,
+                        help='name of model')
     parser = deepspeed.add_config_arguments(parser)
     args = parser.parse_args()
 
@@ -271,6 +274,27 @@ def main():
                                 ds_config=ds_config,
                                 disable_dropout=args.disable_dropout
                                 )
+    elif 'opt' in args.model_name_or_path and args.CL_method == 'SVD':
+        # TODO: fix this logic so that repetitive code is tightened up for SVD
+        model = create_hf_model(CustomOPTForCausalLM,
+                                args.model_name_or_path,
+                                tokenizer,
+                                ds_config=ds_config,
+                                disable_dropout=args.disable_dropout
+                                )
+
+        repurposed_dims_size = 100
+        projection_configs = None
+        PROJ_CONFIG_PATH = args.model + '_proj_config.pkl'
+        if not os.path.exists(PROJ_CONFIG_PATH):
+            projection_configs = generate_basis_for_opt(model, repurposed_dims_size)
+            with open(PROJ_CONFIG_PATH, 'wb') as f:
+                pickle.dump(projection_configs, f)
+            print("projection configs has been pickled and saved to disk.")
+        else:
+            with open(PROJ_CONFIG_PATH, 'rb') as f:
+                projection_configs = pickle.load(f)
+            print("projection configs has been loaded from disk.")
     else:
         model = create_hf_model(AutoModelForCausalLM,
                                 args.model_name_or_path,
@@ -502,7 +526,7 @@ def main():
     # Assuming projection_configs is a tuple of lists of tensors
     if args.CL_method == 'SVD':
         projection_configs = tuple(
-            [tensor.to(device) for tensor in config_list] for config_list in projection_configs
+            [(a.to(device), b.to(device)) for a,b in config_list] for config_list in projection_configs
         )
 
     # Now projection_configs_updated contains tensors that are all on the same device as the model

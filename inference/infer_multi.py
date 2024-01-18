@@ -150,6 +150,12 @@ def parse_args():
     parser.add_argument('--CL_method',
             default=None,
             help='continual learning method used')
+    parser.add_argument(
+        "--inference_tasks",
+        type=list_of_strings,
+        default='all',
+        help='Datasets to be used.'
+    )
 
     parser = deepspeed.add_config_arguments(parser)
     args = parser.parse_args()
@@ -242,7 +248,7 @@ def main():
                 progress_bar.update(1)
                 description = f"Step {step}"
                 progress_bar.set_description(description, refresh=False)
-
+            #print('batch', batch['input_ids'])
             with torch.no_grad():
                 # sft config
                 generate_ids = model.generate(input_ids=batch['input_ids'],
@@ -254,11 +260,12 @@ def main():
                                             generation_config=generation_config,
                                             use_cache=True
                                             )
-                
+            #print('gen id', generate_ids)
+
             # add for distributed 
             gathered_ids, max_seq_len = dist_results_gather(generate_ids, tokenizer.eos_token_id)
             gathered_labels, max_label_len = dist_results_gather(ground_truths_ids, tokenizer.eos_token_id)
-
+            #print('gathered ids', gathered_ids)
             if args.global_rank <= 0:
                 sou_sequences = tokenizer.batch_decode(gathered_ids[:, : max_seq_len], skip_special_tokens=True, clean_up_tokenization_spaces=False)
                 pre_sequences = tokenizer.batch_decode(gathered_ids[:, max_seq_len:], skip_special_tokens=True, clean_up_tokenization_spaces=False)
@@ -266,7 +273,7 @@ def main():
                 predicted_sequences += pre_sequences
                 sources_sequences += sou_sequences
                 label_sequences += lab_sequences
-
+            #print('predicted sequences', predicted_sequences)
         return sources_sequences, predicted_sequences, label_sequences
 
 
@@ -414,6 +421,7 @@ def main():
             # Inference !
             print_rank_0("***** Start inference *****", args.global_rank)
             sources_sequences, predicted_sequences, ground_truths = prediction(model, infer_dataloader)
+            #print(predicted_sequences)
 
             # Get Accuracy/ROUGE/BLEU/...
             # The evaluation result is stored in a dictionary. e.g. {"accuracy": .., "rouge-L": ..}

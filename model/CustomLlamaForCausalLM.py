@@ -290,12 +290,15 @@ class CustomLlamaMLP(LlamaMLP):
             down_proj = sum(down_proj)
         else:
             # projection_config is a tuple of the folowing:
-            gate_proj_basis, up_proj_basis, repurposed_dims = projection_config
             #print('hhhhhhhhhhhhhhhhhhhhhhhhhhhhhhhh')
             #x = projection_pipeline(x, self.gate_proj)
             #y = projection_pipeline(x, self.up_proj)
-            x = project_to_subspaces(x, gate_proj_basis, repurposed_dims)
-            y = project_to_subspaces(x, up_proj_basis, repurposed_dims)
+            y = x 
+            if self.training:
+                gate_proj_basis, up_proj_basis, repurposed_dims = projection_config
+                x = project_to_subspaces(x, gate_proj_basis, repurposed_dims)
+                y = project_to_subspaces(x, up_proj_basis, repurposed_dims)
+                
             down_proj = self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(y))
 
         return down_proj

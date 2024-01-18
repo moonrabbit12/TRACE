@@ -20,7 +20,7 @@ def create_hf_model(model_class,
                     disable_dropout=False,
                     ):
     model_config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=True)
-
+    print(model_config)
     if disable_dropout:
         model_config.dropout = 0.0
     # Note: dschf is defined in function scope to avoid global effects
@@ -36,6 +36,8 @@ def create_hf_model(model_class,
         config=model_config,
         trust_remote_code=True,
         resume_download=True)
+    
+    # TODO: generalize this with other models like GPT
 
     # llama use eos_token_id but not end_token_id
     model.config.end_token_id = tokenizer.eos_token_id
@@ -94,7 +96,8 @@ def project_to_subspaces(input_tensor: torch.Tensor, basis: torch.Tensor,
     Returns:
         torch.Tensor: The tensor after projection and traversal.
     """
-
+    if input_tensor.dim() == 2:
+        input_tensor = input_tensor.unsqueeze(dim=0)
     batch_size, sequence_length, hidden_size = input_tensor.shape
 
     if base_dims is None:
@@ -173,3 +176,44 @@ def generate_basis_pipeline(model, repurposed_dims_size):
             repurposed_dims_list.append(torch.arange(hidden_size - repurposed_dims_size, hidden_size))
 
     return (gate_proj_bases, up_proj_bases, repurposed_dims_list)
+
+def generate_basis_for_opt(model, repurposed_dims_size):
+    k_proj_bases = []
+    v_proj_bases = []
+    q_proj_bases = []
+    out_proj_bases = []
+    #self_attn_layer_norm_bases = []
+    fc1_bases = []
+    fc2_bases = []
+    
+    repurposed_dims_list = []
+    for name, param in model.model.decoder.layers.named_parameters():
+        print(name, param)
+        if 'k_proj.weight' in name:
+            print(name, param)
+            hidden_size = param.shape[1]
+            k_proj_bases.append((get_latent_directions_module(param), torch.arange(hidden_size - repurposed_dims_size, hidden_size)))
+        elif 'v_proj.weight' in name:
+            print(name, param)
+            hidden_size = param.shape[1]
+            v_proj_bases.append((get_latent_directions_module(param), torch.arange(hidden_size - repurposed_dims_size, hidden_size)))
+        elif 'q_proj.weight' in name:
+            print(name, param)
+            hidden_size = param.shape[1]
+            q_proj_bases.append((get_latent_directions_module(param), torch.arange(hidden_size - repurposed_dims_size, hidden_size)))
+        elif 'out_proj.weight' in name:
+            print(name, param)
+            hidden_size = param.shape[1]
+            out_proj_bases.append((get_latent_directions_module(param), torch.arange(hidden_size - repurposed_dims_size, hidden_size)))
+        elif 'fc1.weight' in name:
+            print(name, param)
+            hidden_size = param.shape[1]
+            fc1_bases.append((get_latent_directions_module(param), torch.arange(hidden_size - repurposed_dims_size, hidden_size)))
+        elif 'fc2.weight' in name:
+            print(name, param)
+            hidden_size = param.shape[1]
+            fc2_bases.append((get_latent_directions_module(param), torch.arange(hidden_size - repurposed_dims_size, hidden_size)))
+        else:
+            continue
+
+    return (k_proj_bases, v_proj_bases, q_proj_bases, out_proj_bases, fc1_bases, fc2_bases)
