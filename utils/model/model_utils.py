@@ -42,7 +42,7 @@ def create_hf_model(model_class,
         print('end token -----> eos token')
         # llama use eos_token_id but not end_token_id
         model.config.end_token_id = tokenizer.eos_token_id
-    if 'llama' or 'vicuna' or 'opt' in model_name_or_path
+    if 'llama' or 'vicuna' or 'opt' in model_name_or_path:
         # compatible with OPT and llama2
         print('pad token ====== eos token')
         model.config.pad_token_id = model.config.eos_token_id
