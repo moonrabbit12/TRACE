@@ -38,11 +38,14 @@ def create_hf_model(model_class,
         resume_download=True)
     
     # TODO: generalize this with other models like GPT
-
-    # llama use eos_token_id but not end_token_id
-    model.config.end_token_id = tokenizer.eos_token_id
-    # compatible with OPT and llama2
-    model.config.pad_token_id = model.config.eos_token_id
+    if 'llama' or 'vicuna' in model_name_or_path:
+        print('end token -----> eos token')
+        # llama use eos_token_id but not end_token_id
+        model.config.end_token_id = tokenizer.eos_token_id
+    if 'llama' or 'vicuna' or 'opt' in model_name_or_path
+        # compatible with OPT and llama2
+        print('pad token ====== eos token')
+        model.config.pad_token_id = model.config.eos_token_id
     model.resize_token_embeddings(int(8 * math.ceil(len(tokenizer) / 8.0)))  # make the vocab size multiple of 8
 
     return model
