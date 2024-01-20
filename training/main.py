@@ -253,7 +253,7 @@ def main():
                                 ds_config=ds_config,
                                 disable_dropout=args.disable_dropout
                                 )
-        repurposed_dims_size = 100
+        repurposed_dims_size = 500
         projection_configs = None
         PROJ_CONFIG_PATH = 'proj_config.pkl'
         if not os.path.exists(PROJ_CONFIG_PATH):

@@ -38,11 +38,11 @@ def create_hf_model(model_class,
         resume_download=True)
     
     # TODO: generalize this with other models like GPT
-    if 'llama' or 'vicuna' in model_name_or_path:
+    if 'llama' in model_name_or_path or 'vicuna' in model_name_or_path:
         print('end token -----> eos token')
         # llama use eos_token_id but not end_token_id
         model.config.end_token_id = tokenizer.eos_token_id
-    if 'llama' or 'vicuna' or 'opt' in model_name_or_path:
+    if 'llama' in model_name_or_path or 'vicuna' in model_name_or_path or 'opt' in model_name_or_path:
         # compatible with OPT and llama2
         print('pad token ====== eos token')
         model.config.pad_token_id = model.config.eos_token_id
@@ -59,7 +59,8 @@ def get_latent_directions_module(module):
     #tensor_float = layer.weight.data.to(torch.float32)
     U, S, VH = torch.linalg.svd(module)
     VH = VH.to(torch.bfloat16)
-    return VH
+    V = VH.mH
+    return V
 
 def get_latent_directions(model):
     results = []
