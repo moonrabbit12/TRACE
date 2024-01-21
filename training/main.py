@@ -202,6 +202,10 @@ def parse_args():
     parser.add_argument('--model',
                         default=None,
                         help='name of model')
+    parser.add_argument('--repurpose_dim_size',
+                        type=int,
+                        default=100,
+                        help='repurpose dimension size')
     parser = deepspeed.add_config_arguments(parser)
     args = parser.parse_args()
 
@@ -253,7 +257,7 @@ def main():
                                 ds_config=ds_config,
                                 disable_dropout=args.disable_dropout
                                 )
-        repurposed_dims_size = 500
+        repurposed_dims_size = args.repurpose_dim_size
         projection_configs = None
         PROJ_CONFIG_PATH = 'proj_config.pkl'
         if not os.path.exists(PROJ_CONFIG_PATH):
@@ -283,9 +287,9 @@ def main():
                                 disable_dropout=args.disable_dropout
                                 )
 
-        repurposed_dims_size = 100
+        repurposed_dims_size = args.repurpose_dim_size
         projection_configs = None
-        PROJ_CONFIG_PATH = args.model + '_proj_config.pkl'
+        PROJ_CONFIG_PATH = args.model + '_' + str(args.repurpose_dim_size) + '_proj_config.pkl'
         if not os.path.exists(PROJ_CONFIG_PATH):
             projection_configs = generate_basis_for_opt(model, repurposed_dims_size)
             with open(PROJ_CONFIG_PATH, 'wb') as f:
