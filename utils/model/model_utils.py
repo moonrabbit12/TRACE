@@ -168,18 +168,18 @@ def generate_basis_pipeline(model, repurposed_dims_size):
         if 'gate_proj' in name:
             print(name)
             print(param.shape)
-            gate_proj_bases.append(get_latent_directions_module(param))
             hidden_size = param.shape[1]
-            repurposed_dims_list.append(torch.arange(hidden_size - repurposed_dims_size, hidden_size))
+            gate_proj_bases.append((get_latent_directions_module(param), torch.arange(hidden_size - repurposed_dims_size, hidden_size)))
+            #repurposed_dims_list.append(torch.arange(hidden_size - repurposed_dims_size, hidden_size))
 
         elif 'up_proj' in name:
             print(name)
             print(param.shape)
-            up_proj_bases.append(get_latent_directions_module(param))
             hidden_size = param.shape[1]
-            repurposed_dims_list.append(torch.arange(hidden_size - repurposed_dims_size, hidden_size))
+            up_proj_bases.append((get_latent_directions_module(param), torch.arange(hidden_size - repurposed_dims_size, hidden_size)))
+            #repurposed_dims_list.append(torch.arange(hidden_size - repurposed_dims_size, hidden_size))
 
-    return (gate_proj_bases, up_proj_bases, repurposed_dims_list)
+    return (gate_proj_bases, up_proj_bases)
 
 def generate_basis_for_opt(model, repurposed_dims_size):
     k_proj_bases = []
