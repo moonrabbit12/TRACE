@@ -259,9 +259,9 @@ def main():
                                 )
         repurposed_dims_size = args.repurpose_dim_size
         projection_configs = None
-        PROJ_CONFIG_PATH = 'proj_config.pkl'
+        PROJ_CONFIG_PATH = args.model + '_' + str(args.repurpose_dim_size) + '_proj_config.pkl'
         if not os.path.exists(PROJ_CONFIG_PATH):
-            projection_configs = generate_basis_pipeline(model, repurposed_dims_size)
+            projection_configs = generate_basis_for_opt(model, repurposed_dims_size)
             with open(PROJ_CONFIG_PATH, 'wb') as f:
                 pickle.dump(projection_configs, f)
             print("projection configs has been pickled and saved to disk.")
