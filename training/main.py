@@ -40,14 +40,14 @@ from utils.data.data_collator import DataCollator
 from utils.utils import print_rank_0, to_device, save_hf_format, set_random_seed, get_all_reduce_mean, get_optimizer_grouped_parameters, save_zero_three_model, load_hf_tokenizer
 from utils.ds_utils import get_train_ds_config
 from utils.module.lora import convert_linear_layer_to_lora, convert_lora_to_linear_layer, only_optimize_lora_parameters
-from utils.model.model_utils import create_hf_model, get_latent_directions, generate_basis_pipeline, generate_basis_for_opt
+from utils.model.model_utils import create_hf_model, get_latent_directions, generate_basis_pipeline, generate_basis_for_opt, generate_basis_for_bloom
 
 # add flash attention
 from utils.flash_attention.llama_flash_att import replace_llama_attn_with_flash_attn
-from utils.flash_attention.bloom_flash_att import replace_bloom_attn_with_flash_attn
+#from utils.flash_attention.bloom_flash_att import replace_bloom_attn_with_flash_attn
 
 replace_llama_attn_with_flash_attn()
-replace_bloom_attn_with_flash_attn()
+#replace_bloom_attn_with_flash_attn()
 
 # my_peft中修改了lora相关的逻辑
 from model.Replay.LFPT5 import getInitialPrompt
@@ -59,6 +59,7 @@ from params import Method2Class, AllDatasetName
 
 from model.CustomLlamaForCausalLM import CustomLlamaForCausalLM
 from model.CustomOPTForCausalLM import CustomOPTForCausalLM
+from model.CustomBloomForCausalLM import CustomBloomForCausalLM
 
 # TODO, check support for OPT and llama
 
@@ -250,48 +251,40 @@ def main():
     # default the LLM is decoder only model, so padding side is left
     assert tokenizer.padding_side == 'left'
     assert tokenizer.truncation_side == "left"
-    if 'vicuna' in args.model_name_or_path and args.CL_method == 'SVD':
-        model = create_hf_model(CustomLlamaForCausalLM,
-                                args.model_name_or_path,
-                                tokenizer,
-                                ds_config=ds_config,
-                                disable_dropout=args.disable_dropout
-                                )
+    if args.CL_method == 'SVD':
+        if 'vicuna' in args.model_name_or_path:
+            model = create_hf_model(CustomLlamaForCausalLM,
+                                    args.model_name_or_path,
+                                    tokenizer,
+                                    ds_config=ds_config,
+                                    disable_dropout=args.disable_dropout
+                                    )
+
+        elif 'opt' in args.model_name_or_path:
+            # TODO: fix this logic so that repetitive code is tightened up for SVD
+            model = create_hf_model(CustomOPTForCausalLM,
+                                    args.model_name_or_path,
+                                    tokenizer,
+                                    ds_config=ds_config,
+                                    disable_dropout=args.disable_dropout
+                                    )
+        elif 'bloom' in args.model_name_or_path:
+            model = create_hf_model(CustomBloomForCausalLM,
+                                    args.model_name_or_path,
+                                    tokenizer,
+                                    ds_config=ds_config,
+                                    disable_dropout=args.disable_dropout
+                                    )
         repurposed_dims_size = args.repurpose_dim_size
         projection_configs = None
         PROJ_CONFIG_PATH = args.model + '_' + str(args.repurpose_dim_size) + '_proj_config.pkl'
         if not os.path.exists(PROJ_CONFIG_PATH):
-            projection_configs = generate_basis_for_opt(model, repurposed_dims_size)
-            with open(PROJ_CONFIG_PATH, 'wb') as f:
-                pickle.dump(projection_configs, f)
-            print("projection configs has been pickled and saved to disk.")
-        else:
-            with open(PROJ_CONFIG_PATH, 'rb') as f:
-                projection_configs = pickle.load(f)
-            print("projection configs has been loaded from disk.")
-
-        print(projection_configs)
-    elif 'vicuna' in args.model_name_or_path and args.CL_method != 'SVD':
-        model = create_hf_model(LlamaForCausalLM,
-                                args.model_name_or_path,
-                                tokenizer,
-                                ds_config=ds_config,
-                                disable_dropout=args.disable_dropout
-                                )
-    elif 'opt' in args.model_name_or_path and args.CL_method == 'SVD':
-        # TODO: fix this logic so that repetitive code is tightened up for SVD
-        model = create_hf_model(CustomOPTForCausalLM,
-                                args.model_name_or_path,
-                                tokenizer,
-                                ds_config=ds_config,
-                                disable_dropout=args.disable_dropout
-                                )
-
-        repurposed_dims_size = args.repurpose_dim_size
-        projection_configs = None
-        PROJ_CONFIG_PATH = args.model + '_' + str(args.repurpose_dim_size) + '_proj_config.pkl'
-        if not os.path.exists(PROJ_CONFIG_PATH):
-            projection_configs = generate_basis_for_opt(model, repurposed_dims_size)
+            if 'vicuna' in args.model_name_or_path:
+                projection_config = generate_basis_pipeline(model, repurposed_dims_size)
+            elif 'opt' in args.model_name_or_path:
+                projection_configs = generate_basis_for_opt(model, repurposed_dims_size)
+            elif 'bloom' in args.model_name_or_path:
+                projection_configs = generate_basis_for_bloom(model, repurposed_dims_size)
             with open(PROJ_CONFIG_PATH, 'wb') as f:
                 pickle.dump(projection_configs, f)
             print("projection configs has been pickled and saved to disk.")
@@ -300,12 +293,20 @@ def main():
                 projection_configs = pickle.load(f)
             print("projection configs has been loaded from disk.")
     else:
-        model = create_hf_model(AutoModelForCausalLM,
-                                args.model_name_or_path,
-                                tokenizer,
-                                ds_config=ds_config,
-                                disable_dropout=args.disable_dropout
-                                )
+        if 'vicuna' in args.model_name_or_path:
+            model = create_hf_model(LlamaForCausalLM,
+                                    args.model_name_or_path,
+                                    tokenizer,
+                                    ds_config=ds_config,
+                                    disable_dropout=args.disable_dropout
+                                    )
+        else:
+            model = create_hf_model(AutoModelForCausalLM,
+                                    args.model_name_or_path,
+                                    tokenizer,
+                                    ds_config=ds_config,
+                                    disable_dropout=args.disable_dropout
+                                    )
     # some CL methods can be realized by peft
     if args.CL_method == "LFPT5":
         from utils.my_peft import get_peft_model, PromptTuningInit, PromptTuningConfig, LoraConfig, TaskType

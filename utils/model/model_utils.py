@@ -46,6 +46,7 @@ def create_hf_model(model_class,
         # compatible with OPT and llama2
         print('pad token ====== eos token')
         model.config.pad_token_id = model.config.eos_token_id
+    
     model.resize_token_embeddings(int(8 * math.ceil(len(tokenizer) / 8.0)))  # make the vocab size multiple of 8
 
     return model
@@ -221,3 +222,32 @@ def generate_basis_for_opt(model, repurposed_dims_size):
             continue
 
     return (k_proj_bases, v_proj_bases, q_proj_bases, out_proj_bases, fc1_bases, fc2_bases)
+
+
+def generate_basis_for_bloom(model, repurpose_dim_size):
+    query_key_value_bases = []
+    dense_bases = []
+    dense_h_to_4h_bases = []
+    dense_4h_to_h_bases = []
+
+    repurposed_dims_list = []
+
+    for name, param in model.transformer.h.named_parameters():
+        print(name, param)
+        if 'query_key_value.weight' in name:
+            print(name, param)
+            hidden_size = param.shape[1]
+            query_key_value_bases.append((get_latent_directions_module(param), torch.arange(hidden_size - repurpose_dim_size, hidden_size)))
+        elif 'dense.weight' in name:
+            print(name, param)
+            hidden_size = param.shape[1]  
+            dense_bases.append((get_latent_directions_module(param), torch.arange(hidden_size - repurpose_dim_size, hidden_size)))          
+        elif 'dense_h_to_4h.weight' in name:
+            print(name, param)
+            hidden_size = param.shape[1]
+            dense_h_to_4h_bases.append((get_latent_directions_module(param), torch.arange(hidden_size - repurpose_dim_size, hidden_size)))
+        elif 'dense_4h_to_h.weight' in name:
+            print(name, param)
+            hidden_size = param.shape[1]
+            dense_4h_to_h_bases.append((get_latent_directions_module(param), torch.arange(hidden_size - repurpose_dim_size, hidden_size)))
+    return (query_key_value_bases, dense_bases, dense_h_to_4h_bases, dense_4h_to_h_bases)

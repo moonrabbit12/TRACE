@@ -7,6 +7,7 @@ def resolve(dataset: list):
     answers = []
     reasonings = []
     for datium in dataset:
+        print(datium)
         answers.append(datium[0]) # the first char is the answer. e.g. A, B,...
         reasonings.append(datium[2:]) # A/nBecause...
     outputs = {"answers": answers, "reasonings": reasonings}
