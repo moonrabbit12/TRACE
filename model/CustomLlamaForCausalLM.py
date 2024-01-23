@@ -295,9 +295,9 @@ class CustomLlamaMLP(LlamaMLP):
             #y = projection_pipeline(x, self.up_proj)
             y = x 
             if self.training:
-                gate_proj_basis, up_proj_basis, repurposed_dims = projection_config
-                x = project_to_subspaces(x, gate_proj_basis, repurposed_dims)
-                y = project_to_subspaces(x, up_proj_basis, repurposed_dims)
+                gate_proj_basis, up_proj_basis = projection_config
+                x = project_to_subspaces(x, *gate_proj_basis)
+                y = project_to_subspaces(x, *up_proj_basis)
                 
             down_proj = self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(y))
 
@@ -1430,7 +1430,6 @@ class CustomLlamaModel(LlamaModel):
                 all_hidden_states += (hidden_states,)
 
             past_key_value = past_key_values[idx] if past_key_values is not None else None
-            repurposed_dims_size = 100
             if self.gradient_checkpointing and self.training:
 
                 def create_custom_forward(module):
@@ -1441,8 +1440,8 @@ class CustomLlamaModel(LlamaModel):
 
                     return custom_forward
 
-                gate_proj_bases, up_proj_bases, repurposed_dims_list = projection_configs
-                projection_config = (gate_proj_bases[idx], up_proj_bases[idx], repurposed_dims_list[idx])
+                gate_proj_bases, up_proj_bases = projection_configs
+                projection_config = (gate_proj_bases[idx], up_proj_bases[idx])
                 
                 layer_outputs = torch.utils.checkpoint.checkpoint(
                     create_custom_forward(decoder_layer),
