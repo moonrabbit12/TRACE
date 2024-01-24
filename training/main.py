@@ -207,6 +207,12 @@ def parse_args():
                         type=int,
                         default=100,
                         help='repurpose dimension size')
+    parser.add_argument('--use_repurposed_dims',
+                        type=bool, 
+                        default=True,
+                        help='project to base or dormant subspace')
+
+
     parser = deepspeed.add_config_arguments(parser)
     args = parser.parse_args()
 
@@ -257,7 +263,8 @@ def main():
                                     args.model_name_or_path,
                                     tokenizer,
                                     ds_config=ds_config,
-                                    disable_dropout=args.disable_dropout
+                                    disable_dropout=args.disable_dropout,
+                                    args=args
                                     )
 
         elif 'opt' in args.model_name_or_path:
@@ -266,14 +273,16 @@ def main():
                                     args.model_name_or_path,
                                     tokenizer,
                                     ds_config=ds_config,
-                                    disable_dropout=args.disable_dropout
+                                    disable_dropout=args.disable_dropout,
+                                    args=args
                                     )
         elif 'bloom' in args.model_name_or_path:
             model = create_hf_model(CustomBloomForCausalLM,
                                     args.model_name_or_path,
                                     tokenizer,
                                     ds_config=ds_config,
-                                    disable_dropout=args.disable_dropout
+                                    disable_dropout=args.disable_dropout,
+                                    args=args
                                     )
         repurposed_dims_size = args.repurpose_dim_size
         projection_configs = None
@@ -298,14 +307,16 @@ def main():
                                     args.model_name_or_path,
                                     tokenizer,
                                     ds_config=ds_config,
-                                    disable_dropout=args.disable_dropout
+                                    disable_dropout=args.disable_dropout,
+                                    args=args
                                     )
         else:
             model = create_hf_model(AutoModelForCausalLM,
                                     args.model_name_or_path,
                                     tokenizer,
                                     ds_config=ds_config,
-                                    disable_dropout=args.disable_dropout
+                                    disable_dropout=args.disable_dropout,
+                                    args=args
                                     )
     # some CL methods can be realized by peft
     if args.CL_method == "LFPT5":

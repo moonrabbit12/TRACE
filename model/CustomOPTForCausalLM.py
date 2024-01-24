@@ -1,5 +1,6 @@
 from transformers import LlamaModel, LlamaForCausalLM, LlamaConfig
 from utils.model.model_utils import get_latent_directions_module, project_to_subspaces, projection_pipeline
+from model import CustomOPTConfig
 from transformers.utils import add_start_docstrings_to_model_forward
 
 from typing import List, Optional, Tuple, Union, List
@@ -27,7 +28,7 @@ if is_flash_attn_2_available():
 logger = logging.get_logger(__name__)
 
 _CHECKPOINT_FOR_DOC = "facebook/opt-350m"
-_CONFIG_FOR_DOC = "OPTConfig"
+_CONFIG_FOR_DOC = "CustomOPTConfig"
 
 # Base model docstring
 _EXPECTED_OUTPUT_SHAPE = [1, 8, 1024]
@@ -1195,7 +1196,7 @@ class CustomOPTAttention(nn.Module):
 
     def __init__(
         self,
-        config: OPTConfig,
+        config: CustomOPTConfig,
         is_decoder: bool = False,
         **kwargs,
     ):
@@ -1276,15 +1277,15 @@ class CustomOPTAttention(nn.Module):
         elif is_cross_attention:
             # cross_attentions
             if self.training:
-                kvsk = project_to_subspaces(key_value_states, *k_proj_base)
-                kvsv = project_to_subspaces(key_value_states, *v_proj_base)
+                kvsk = project_to_subspaces(key_value_states, *k_proj_base, use_repurposed_dims=self.config.use_repurposed_dims)
+                kvsv = project_to_subspaces(key_value_states, *v_proj_base, use_repurposed_dims=self.config.use_repurposed_dims)
             key_states = self._shape(self.k_proj(kvsk), -1, bsz)
             value_states = self._shape(self.v_proj(kvsv), -1, bsz)
         elif past_key_value is not None:
             # reuse k, v, self_attention
             if self.training:
-                xk = project_to_subspaces(hidden_states, *k_proj_base)
-                xv = project_to_subspaces(hidden_states, *v_proj_base)
+                xk = project_to_subspaces(hidden_states, *k_proj_base, use_repurposed_dims=self.config.use_repurposed_dims)
+                xv = project_to_subspaces(hidden_states, *v_proj_base, use_repurposed_dims=self.config.use_repurposed_dims)
             key_states = self._shape(self.k_proj(xk), -1, bsz)
             value_states = self._shape(self.v_proj(xv), -1, bsz)
             key_states = torch.cat([past_key_value[0], key_states], dim=2)
@@ -1292,8 +1293,8 @@ class CustomOPTAttention(nn.Module):
         else:
             # self_attention
             if self.training:
-                xk = project_to_subspaces(hidden_states, *k_proj_base)
-                xv = project_to_subspaces(hidden_states, *v_proj_base)
+                xk = project_to_subspaces(hidden_states, *k_proj_base, use_repurposed_dims=self.config.use_repurposed_dims)
+                xv = project_to_subspaces(hidden_states, *v_proj_base, use_repurposed_dims=self.config.use_repurposed_dims)
             key_states = self._shape(self.k_proj(xk), -1, bsz)
             value_states = self._shape(self.v_proj(xv), -1, bsz)
 
@@ -1424,7 +1425,7 @@ class CustomOptFlashAttention2(OptFlashAttention2):
         #TODO: think if svd_proj, then q_proj makes sense...? 
         # and for k and v too
         if self.training:
-            x = project_to_subspaces(x, *q_proj_base)
+            x = project_to_subspaces(x, *q_proj_base, use_repurposed_dims=self.config.use_repurposed_dims)
             
         query_states = self.q_proj(x)
 
@@ -1436,7 +1437,7 @@ class CustomOptFlashAttention2(OptFlashAttention2):
         elif is_cross_attention:
             # cross_attentions
             if self.training:
-                y = project_to_subspaces(y, *k_proj_base)
+                y = project_to_subspaces(y, *k_proj_base, use_repurposed_dims=self.config.use_repurposed_dims)
             key_states = self._shape(self.k_proj(y), -1, bsz)
             value_states = self._shape(self.v_proj(y), -1, bsz)
         elif past_key_value is not None:
@@ -1444,8 +1445,8 @@ class CustomOptFlashAttention2(OptFlashAttention2):
             xk = hidden_states
             xv = hidden_states
             if self.training:
-                xk = project_to_subspaces(hidden_states, *k_proj_base)
-                xv = project_to_subspaces(hidden_states, *v_proj_base)
+                xk = project_to_subspaces(hidden_states, *k_proj_base, use_repurposed_dims=self.config.use_repurposed_dims)
+                xv = project_to_subspaces(hidden_states, *v_proj_base, use_repurposed_dims=self.config.use_repurposed_dims)
             key_states = self._shape(self.k_proj(xk), -1, bsz)
             value_states = self._shape(self.v_proj(xv), -1, bsz)
             key_states = torch.cat([past_key_value[0], key_states], dim=2)
@@ -1455,8 +1456,8 @@ class CustomOptFlashAttention2(OptFlashAttention2):
             xk = hidden_states
             xv = hidden_states
             if self.training:
-                xk = project_to_subspaces(hidden_states, *k_proj_base)
-                xv = project_to_subspaces(hidden_states, *v_proj_base)
+                xk = project_to_subspaces(hidden_states, *k_proj_base, use_repurposed_dims=self.config.use_repurposed_dims)
+                xv = project_to_subspaces(hidden_states, *v_proj_base, use_repurposed_dims=self.config.use_repurposed_dims)
             key_states = self._shape(self.k_proj(xk), -1, bsz)
             value_states = self._shape(self.v_proj(xv), -1, bsz)
 
@@ -1508,7 +1509,7 @@ class CustomOptFlashAttention2(OptFlashAttention2):
 
         attn_weights_reshaped = attn_output.reshape(bsz, query_length, self.num_heads * self.head_dim)
         if self.training:
-            attn_weights_reshaped = project_to_subspaces(attn_weights_reshaped, *out_proj_base)
+            attn_weights_reshaped = project_to_subspaces(attn_weights_reshaped, *out_proj_base, use_repurposed_dims=self.config.use_repurposed_dims)
         attn_output = self.out_proj(attn_weights_reshaped)
 
         if not output_attentions:
@@ -1626,8 +1627,9 @@ OPT_ATTENTION_CLASSES = {
 
 
 class CustomOPTDecoderLayer(OPTDecoderLayer):
-    def __init__(self, config: OPTConfig):
+    def __init__(self, config: CustomOPTConfig):
         super().__init__(config)
+        self.config = config
         self.embed_dim = config.hidden_size
 
         self.self_attn = OPT_ATTENTION_CLASSES[config._attn_implementation](config=config, is_decoder=True)
@@ -1703,12 +1705,12 @@ class CustomOPTDecoderLayer(OPTDecoderLayer):
             hidden_states = self.final_layer_norm(hidden_states)
 
         if self.training:
-            hidden_states = project_to_subspaces(hidden_states, *fc1_base)
+            hidden_states = project_to_subspaces(hidden_states, *fc1_base, use_repurposed_dims=self.config.use_repurposed_dims)
         hidden_states = self.fc1(hidden_states)
         hidden_states = self.activation_fn(hidden_states)
 
         if self.training:
-            hidden_states = project_to_subspaces(hidden_states, *fc2_base)
+            hidden_states = project_to_subspaces(hidden_states, *fc2_base, use_repurposed_dims=self.config.use_repurposed_dims)
         hidden_states = self.fc2(hidden_states)
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
 
@@ -1737,7 +1739,7 @@ class CustomOPTDecoder(OPTDecoder):
         config: OPTConfig
     """
 
-    def __init__(self, config: OPTConfig):
+    def __init__(self, config: CustomOPTConfig):
         super().__init__(config)
         self.dropout = config.dropout
         self.layerdrop = config.layerdrop
@@ -1985,7 +1987,7 @@ class CustomOPTDecoder(OPTDecoder):
 
 
 class CustomOPTModel(OPTModel):
-    def __init__(self, config: OPTConfig):
+    def __init__(self, config: CustomOPTConfig):
         super().__init__(config)
         self.decoder = CustomOPTDecoder(config)
         # Initialize weights and apply final processing

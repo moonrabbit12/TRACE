@@ -13,14 +13,21 @@ from huggingface_hub import snapshot_download
 from transformers.deepspeed import HfDeepSpeedConfig
 from transformers import LlamaForCausalLM, LlamaConfig
 
+from model.CustomOPTConfig import CustomOPTConfig
+
 def create_hf_model(model_class,
                     model_name_or_path,
                     tokenizer,
                     ds_config=None,
                     disable_dropout=False,
+                    args=None,
                     ):
     model_config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=True)
-    print(model_config)
+    #print(model_config)
+    if 'opt' in model_name_or_path:
+        model_config = CustomOPTConfig.from_pretrained(model_name_or_path)
+        model_config.use_repurposed_dims = args.use_repurposed_dims
+        print(model_config)
     if disable_dropout:
         model_config.dropout = 0.0
     # Note: dschf is defined in function scope to avoid global effects
@@ -36,7 +43,7 @@ def create_hf_model(model_class,
         config=model_config,
         trust_remote_code=True,
         resume_download=True)
-    
+
     # TODO: generalize this with other models like GPT
     if 'llama' in model_name_or_path or 'vicuna' in model_name_or_path:
         print('end token -----> eos token')
@@ -86,7 +93,7 @@ def get_latent_directions(model):
 
 def project_to_subspaces(input_tensor: torch.Tensor, basis: torch.Tensor,
                          repurposed_dims: torch.Tensor, base_dims: torch.Tensor = None,
-                         step_size=None):
+                         step_size=None, use_repurposed_dims=True):
     """
     Project each element in the sequence of input_tensor on the base subspace,
     then traverse the projected element along the repurposed directions.
@@ -114,6 +121,7 @@ def project_to_subspaces(input_tensor: torch.Tensor, basis: torch.Tensor,
     #print('repurposed dimensions', repurposed_dims)
     #print('repurposed dimensions shape', repurposed_dims.shape)
     
+    # TODO: check if the components/axes are correct
     repurposed_directions = basis[:, repurposed_dims].to(input_tensor.device)
     base_directions = basis[:, base_dims].to(input_tensor.device)
 
@@ -121,8 +129,12 @@ def project_to_subspaces(input_tensor: torch.Tensor, basis: torch.Tensor,
     reshaped_tensor = input_tensor.view(-1, hidden_size)
 
     # Project the reshaped tensor
-    projected_tensor = reshaped_tensor @ base_directions
-    base_tensor = projected_tensor @ base_directions.T
+    if use_repurposed_dims:
+        projected_tensor = reshaped_tensor @ repurposed_directions
+        base_tensor = projected_tensor @ repurposed_directions.T
+    else:
+        projected_tensor = reshaped_tensor @ base_directions
+        base_tensor = projected_tensor @ base_directions.T
 
     if step_size is None:
         # Reshape back to original dimensions and return
