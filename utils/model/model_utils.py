@@ -13,7 +13,7 @@ from huggingface_hub import snapshot_download
 from transformers.deepspeed import HfDeepSpeedConfig
 from transformers import LlamaForCausalLM, LlamaConfig
 
-from model.CustomOPTConfig import CustomOPTConfig
+import transformers
 
 def create_hf_model(model_class,
                     model_name_or_path,
@@ -22,10 +22,11 @@ def create_hf_model(model_class,
                     disable_dropout=False,
                     args=None,
                     ):
+    transformers.logging.set_verbosity_info()
     model_config = AutoConfig.from_pretrained(model_name_or_path, trust_remote_code=True)
+    print(model_config)
     #print(model_config)
-    if 'opt' in model_name_or_path:
-        model_config = CustomOPTConfig.from_pretrained(model_name_or_path)
+    if args.CL_method == 'SVD':
         model_config.use_repurposed_dims = args.use_repurposed_dims
         print(model_config)
     if disable_dropout:

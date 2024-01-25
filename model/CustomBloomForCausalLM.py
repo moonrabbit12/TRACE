@@ -932,7 +932,7 @@ class CustomBloomMLP(BloomMLP):
     def __init__(self, config: BloomConfig):
         super().__init__(config)
         hidden_size = config.hidden_size
-
+        self.config = config
         self.pretraining_tp = config.pretraining_tp
         self.slow_but_exact = config.slow_but_exact
         self.dense_h_to_4h = nn.Linear(hidden_size, 4 * hidden_size)
@@ -943,12 +943,12 @@ class CustomBloomMLP(BloomMLP):
     def forward(self, hidden_states: torch.Tensor, residual: torch.Tensor, projection_config: Optional[Tuple] = None) -> torch.Tensor:
         _, _, dense_h_to_4h_base, dense_4h_to_h_base = projection_config
         if self.training:
-            hidden_states = project_to_subspaces(hidden_states, *dense_h_to_4h_base)
+            hidden_states = project_to_subspaces(hidden_states, *dense_h_to_4h_base, use_repurposed_dims=self.config.use_repurposed_dims)
         hidden_states = self.gelu_impl(self.dense_h_to_4h(hidden_states))
 
         if self.pretraining_tp > 1 and self.slow_but_exact:
             if self.training:
-                hidden_states = project_to_subspaces(hidden_states, *dense_4h_to_h_base)
+                hidden_states = project_to_subspaces(hidden_states, *dense_4h_to_h_base, use_repurposed_dims=self.config.use_repurposed_dims)
             intermediate_output = torch.zeros_like(residual)
             slices = self.dense_4h_to_h.weight.shape[-1] / self.pretraining_tp
             for i in range(self.pretraining_tp):
@@ -958,7 +958,7 @@ class CustomBloomMLP(BloomMLP):
                 )
         else:
             if self.training:
-                hidden_states = project_to_subspaces(hidden_states, *dense_4h_to_h_base)
+                hidden_states = project_to_subspaces(hidden_states, *dense_4h_to_h_base, use_repurposed_dims=self.config.use_repurposed_dims)
             intermediate_output = self.dense_4h_to_h(hidden_states)
 
         output = dropout_add(intermediate_output, residual, self.hidden_dropout, self.training)
@@ -970,6 +970,8 @@ class CustomBloomMLP(BloomMLP):
 class CustomBloomAttention(BloomAttention):
     def __init__(self, config: BloomConfig):
         super().__init__(config)
+
+        self.config = config
 
         self.pretraining_tp = config.pretraining_tp
         self.slow_but_exact = config.slow_but_exact
@@ -1049,7 +1051,7 @@ class CustomBloomAttention(BloomAttention):
     ):
         query_key_value_base, dense_base, _, _ = projection_config
         if self.training:
-            hidden_states = project_to_subspaces(hidden_states, *query_key_value_base)
+            hidden_states = project_to_subspaces(hidden_states, *query_key_value_base, use_repurposed_dims=self.config.use_repurposed_dims)
 
         fused_qkv = self.query_key_value(hidden_states)  # [batch_size, seq_length, 3 x hidden_size]
 
@@ -1114,7 +1116,7 @@ class CustomBloomAttention(BloomAttention):
         # aggregate results across tp ranks. See here: https://github.com/pytorch/pytorch/issues/76232
         if self.pretraining_tp > 1 and self.slow_but_exact:
             if self.training:
-                context_layer = project_to_subspaces(context_layer, *dense_base)
+                context_layer = project_to_subspaces(context_layer, *dense_base, use_repurposed_dims=self.config.use_repurposed_dims)
             slices = self.hidden_size / self.pretraining_tp
             output_tensor = torch.zeros_like(context_layer)
             for i in range(self.pretraining_tp):
@@ -1124,7 +1126,7 @@ class CustomBloomAttention(BloomAttention):
                 )
         else:
             if self.training:
-                context_layer = project_to_subspaces(context_layer, *dense_base)
+                context_layer = project_to_subspaces(context_layer, *dense_base, use_repurposed_dims=self.config.use_repurposed_dims)
             output_tensor = self.dense(context_layer)
 
         output_tensor = dropout_add(output_tensor, residual, self.hidden_dropout, self.training)

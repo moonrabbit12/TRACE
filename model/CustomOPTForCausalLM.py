@@ -1,6 +1,5 @@
 from transformers import LlamaModel, LlamaForCausalLM, LlamaConfig
 from utils.model.model_utils import get_latent_directions_module, project_to_subspaces, projection_pipeline
-from model import CustomOPTConfig
 from transformers.utils import add_start_docstrings_to_model_forward
 
 from typing import List, Optional, Tuple, Union, List
@@ -28,7 +27,7 @@ if is_flash_attn_2_available():
 logger = logging.get_logger(__name__)
 
 _CHECKPOINT_FOR_DOC = "facebook/opt-350m"
-_CONFIG_FOR_DOC = "CustomOPTConfig"
+_CONFIG_FOR_DOC = "OPTConfig"
 
 # Base model docstring
 _EXPECTED_OUTPUT_SHAPE = [1, 8, 1024]
@@ -1196,7 +1195,7 @@ class CustomOPTAttention(nn.Module):
 
     def __init__(
         self,
-        config: CustomOPTConfig,
+        config: OPTConfig,
         is_decoder: bool = False,
         **kwargs,
     ):
@@ -1627,7 +1626,7 @@ OPT_ATTENTION_CLASSES = {
 
 
 class CustomOPTDecoderLayer(OPTDecoderLayer):
-    def __init__(self, config: CustomOPTConfig):
+    def __init__(self, config: OPTConfig):
         super().__init__(config)
         self.config = config
         self.embed_dim = config.hidden_size
@@ -1739,7 +1738,7 @@ class CustomOPTDecoder(OPTDecoder):
         config: OPTConfig
     """
 
-    def __init__(self, config: CustomOPTConfig):
+    def __init__(self, config: OPTConfig):
         super().__init__(config)
         self.dropout = config.dropout
         self.layerdrop = config.layerdrop
@@ -1987,7 +1986,7 @@ class CustomOPTDecoder(OPTDecoder):
 
 
 class CustomOPTModel(OPTModel):
-    def __init__(self, config: CustomOPTConfig):
+    def __init__(self, config: OPTConfig):
         super().__init__(config)
         self.decoder = CustomOPTDecoder(config)
         # Initialize weights and apply final processing

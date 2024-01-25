@@ -145,6 +145,10 @@ def parse_args():
     parser.add_argument('--CL_method',
             default=None,
             help='continual learning method used')
+    parser.add_argument('--use_repurposed_dims',
+                        type=bool, 
+                        default=True,
+                        help='project to base or dormant subspace')
 
     parser = deepspeed.add_config_arguments(parser)
     args = parser.parse_args()
@@ -227,6 +231,7 @@ def main():
                                 args.model_name_or_path,
                                 tokenizer,
                                 ds_config=None,
+                                args=args,
                                 )
         
         # TODO: add adapters
