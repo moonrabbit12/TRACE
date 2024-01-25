@@ -94,7 +94,7 @@ def get_latent_directions(model):
 
 def project_to_subspaces(input_tensor: torch.Tensor, basis: torch.Tensor,
                          repurposed_dims: torch.Tensor, base_dims: torch.Tensor = None,
-                         step_size=None, use_repurposed_dims=True):
+                         step_size=50.0, use_repurposed_dims=True):
     """
     Project each element in the sequence of input_tensor on the base subspace,
     then traverse the projected element along the repurposed directions.
@@ -130,12 +130,12 @@ def project_to_subspaces(input_tensor: torch.Tensor, basis: torch.Tensor,
     reshaped_tensor = input_tensor.view(-1, hidden_size)
 
     # Project the reshaped tensor
-    if use_repurposed_dims:
-        projected_tensor = reshaped_tensor @ repurposed_directions
-        base_tensor = projected_tensor @ repurposed_directions.T
-    else:
-        projected_tensor = reshaped_tensor @ base_directions
-        base_tensor = projected_tensor @ base_directions.T
+    #if use_repurposed_dims:
+    #    projected_tensor = reshaped_tensor @ repurposed_directions
+    #    base_tensor = projected_tensor @ repurposed_directions.T
+    #else:
+    projected_tensor = reshaped_tensor @ base_directions
+    base_tensor = projected_tensor @ base_directions.T
 
     if step_size is None:
         # Reshape back to original dimensions and return
@@ -148,17 +148,24 @@ def project_to_subspaces(input_tensor: torch.Tensor, basis: torch.Tensor,
 
     if step_size.dim() == 1:
         # separate same-sized steps on all dims
-        num_steps = step_size.shape[0]
-        edits = torch.einsum('a, df -> adf', step_size, repurposed_directions)
+        #num_steps = step_size.shape[0]
+        edits = torch.einsum('a, df -> adf', step_size, repurposed_directions).to(torch.bfloat16)
+        edits = edits.squeeze(0)
+        #edits = step_size * repurposed_directions
     elif step_size.dim() == 3:
+        # TODO: maybe remove this
         # compound steps, on multiple dims
         edits = step_size @ repurposed_directions
     else:
         raise NotImplementedError('Cannot edit with these values')
 
-    edit_tensors = base_tensor.unsqueeze(1) + edits.unsqueeze(0).unsqueeze(-1)
-    edit_tensors = edit_tensors.view(-1, hidden_size)  # Flatten for reshaping
-
+    edit_tensors = base_tensor.unsqueeze(1) + edits
+    #print('edit tensor shape', edit_tensors.shape)
+    edit_tensors = edit_tensors.sum(dim=1)
+    #print('sum edit tensor shape', edit_tensors.shape)
+    #print(edit_tensors.dtype)
+    #print(batch_size, sequence_length, *edit_tensors.shape[1:])
+    #edit_tensors = edit_tensors.view(-1, hidden_size)  # Flatten for reshaping
     # Reshape back to [batch_size, sequence_length, hidden_size, ...]
     return edit_tensors.view(batch_size, sequence_length, *edit_tensors.shape[1:])
 
