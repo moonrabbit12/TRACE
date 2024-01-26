@@ -28,6 +28,8 @@ def create_hf_model(model_class,
     #print(model_config)
     if args.CL_method == 'SVD':
         model_config.use_repurposed_dims = args.use_repurposed_dims
+        model_config.ffn_only = args.ffn_only
+        model_config.mha_only = args.mha_only
         print(model_config)
     if disable_dropout:
         model_config.dropout = 0.0

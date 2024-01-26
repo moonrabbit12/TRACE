@@ -211,7 +211,14 @@ def parse_args():
                         type=bool, 
                         default=True,
                         help='project to base or dormant subspace')
-
+    parser.add_argument('--ffn_only',
+                        type=bool, 
+                        default=True,
+                        help='project only ffn layer')
+    parser.add_argument('--mha_only',
+                        type=bool, 
+                        default=True,
+                        help='project only mha')
 
     parser = deepspeed.add_config_arguments(parser)
     args = parser.parse_args()
