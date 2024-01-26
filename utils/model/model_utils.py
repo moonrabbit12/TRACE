@@ -96,7 +96,7 @@ def get_latent_directions(model):
 
 def project_to_subspaces(input_tensor: torch.Tensor, basis: torch.Tensor,
                          repurposed_dims: torch.Tensor, base_dims: torch.Tensor = None,
-                         step_size=50.0, use_repurposed_dims=True):
+                         step_size=None, use_repurposed_dims=True):
     """
     Project each element in the sequence of input_tensor on the base subspace,
     then traverse the projected element along the repurposed directions.
@@ -132,12 +132,14 @@ def project_to_subspaces(input_tensor: torch.Tensor, basis: torch.Tensor,
     reshaped_tensor = input_tensor.view(-1, hidden_size)
 
     # Project the reshaped tensor
-    #if use_repurposed_dims:
-    #    projected_tensor = reshaped_tensor @ repurposed_directions
-    #    base_tensor = projected_tensor @ repurposed_directions.T
-    #else:
-    projected_tensor = reshaped_tensor @ base_directions
-    base_tensor = projected_tensor @ base_directions.T
+    if use_repurposed_dims:
+        # project to dormant subspace
+        projected_tensor = reshaped_tensor @ repurposed_directions
+        base_tensor = projected_tensor @ repurposed_directions.T
+    else:
+        # project to strong/dominant/base subspace
+        projected_tensor = reshaped_tensor @ base_directions
+        base_tensor = projected_tensor @ base_directions.T
 
     if step_size is None:
         # Reshape back to original dimensions and return
