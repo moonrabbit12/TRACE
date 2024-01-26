@@ -942,12 +942,12 @@ class CustomBloomMLP(BloomMLP):
 
     def forward(self, hidden_states: torch.Tensor, residual: torch.Tensor, projection_config: Optional[Tuple] = None) -> torch.Tensor:
         _, _, dense_h_to_4h_base, dense_4h_to_h_base = projection_config
-        if self.training:
+        if self.training and not self.config.mha_only:
             hidden_states = project_to_subspaces(hidden_states, *dense_h_to_4h_base, use_repurposed_dims=self.config.use_repurposed_dims)
         hidden_states = self.gelu_impl(self.dense_h_to_4h(hidden_states))
 
         if self.pretraining_tp > 1 and self.slow_but_exact:
-            if self.training:
+            if self.training and not self.config.mha_only:
                 hidden_states = project_to_subspaces(hidden_states, *dense_4h_to_h_base, use_repurposed_dims=self.config.use_repurposed_dims)
             intermediate_output = torch.zeros_like(residual)
             slices = self.dense_4h_to_h.weight.shape[-1] / self.pretraining_tp
@@ -957,7 +957,7 @@ class CustomBloomMLP(BloomMLP):
                     self.dense_4h_to_h.weight[:, int(i * slices) : int((i + 1) * slices)],
                 )
         else:
-            if self.training:
+            if self.training and not self.config.mha_only:
                 hidden_states = project_to_subspaces(hidden_states, *dense_4h_to_h_base, use_repurposed_dims=self.config.use_repurposed_dims)
             intermediate_output = self.dense_4h_to_h(hidden_states)
 
@@ -1050,7 +1050,7 @@ class CustomBloomAttention(BloomAttention):
         projection_config: Optional[Tuple] = None,
     ):
         query_key_value_base, dense_base, _, _ = projection_config
-        if self.training:
+        if self.training and not self.config.ffn_only:
             hidden_states = project_to_subspaces(hidden_states, *query_key_value_base, use_repurposed_dims=self.config.use_repurposed_dims)
 
         fused_qkv = self.query_key_value(hidden_states)  # [batch_size, seq_length, 3 x hidden_size]
@@ -1115,7 +1115,7 @@ class CustomBloomAttention(BloomAttention):
 
         # aggregate results across tp ranks. See here: https://github.com/pytorch/pytorch/issues/76232
         if self.pretraining_tp > 1 and self.slow_but_exact:
-            if self.training:
+            if self.training and not self.config.ffn_only:
                 context_layer = project_to_subspaces(context_layer, *dense_base, use_repurposed_dims=self.config.use_repurposed_dims)
             slices = self.hidden_size / self.pretraining_tp
             output_tensor = torch.zeros_like(context_layer)
@@ -1125,7 +1125,7 @@ class CustomBloomAttention(BloomAttention):
                     self.dense.weight[:, int(i * slices) : int((i + 1) * slices)],
                 )
         else:
-            if self.training:
+            if self.training and not self.config.ffn_only:
                 context_layer = project_to_subspaces(context_layer, *dense_base, use_repurposed_dims=self.config.use_repurposed_dims)
             output_tensor = self.dense(context_layer)
 
