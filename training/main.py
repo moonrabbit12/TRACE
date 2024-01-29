@@ -63,6 +63,16 @@ from model.CustomBloomForCausalLM import CustomBloomForCausalLM
 
 # TODO, check support for OPT and llama
 
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
+
 
 def parse_args():
     def list_of_strings(arg):
@@ -208,28 +218,29 @@ def parse_args():
                         default=100,
                         help='repurpose dimension size')
     parser.add_argument('--use_repurposed_dims',
-                        type=bool, 
-                        default=True,
+                        type=str2bool,
                         help='project to base or dormant subspace')
     parser.add_argument('--ffn_only',
-                        type=bool, 
-                        default=True,
-                        help='project only ffn layer')
+                        type=str2bool,
+                        help='Project only ffn layer. Set this flag if you want to enable it.')
     parser.add_argument('--mha_only',
-                        type=bool, 
-                        default=True,
-                        help='project only mha')
+                        type=str2bool,
+                        help='Project only mha. Set this flag if you want to enable it.')
 
+    print('here is parser')
+    print(parser)
     parser = deepspeed.add_config_arguments(parser)
     args = parser.parse_args()
-
+    print('here is args in the parse args')
+    print(args)
 
     return args
 
 
 def main():
     args = parse_args()
-
+    print('hre is the stuffffffffffffff')
+    print(args)
     if args.local_rank == -1:
         print(args.local_rank)
         device = torch.device("cuda")

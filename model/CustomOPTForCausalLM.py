@@ -1290,6 +1290,7 @@ class CustomOPTAttention(nn.Module):
         kvsv = key_value_states
         # get query proj
         if self.training and not self.config.ffn_only:
+            #print('we are projecting to mha tooooooo')
             xq = project_to_subspaces(hidden_states, *q_proj_base, use_repurposed_dims=self.config.use_repurposed_dims)
         query_states = self.q_proj(xq) * self.scaling
         # get key, value proj
@@ -1730,6 +1731,7 @@ class CustomOPTDecoderLayer(OPTDecoderLayer):
             hidden_states = self.final_layer_norm(hidden_states)
 
         if self.training and not self.config.mha_only:
+            #print('wr are projecting to FFN')
             hidden_states = project_to_subspaces(hidden_states, *fc1_base, use_repurposed_dims=self.config.use_repurposed_dims)
         hidden_states = self.fc1(hidden_states)
         hidden_states = self.activation_fn(hidden_states)
