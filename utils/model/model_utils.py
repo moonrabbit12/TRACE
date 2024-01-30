@@ -4,6 +4,7 @@
 # DeepSpeed Team
 import os
 import math
+import random
 import torch
 from transformers import (
     AutoConfig,
@@ -33,6 +34,7 @@ def create_hf_model(model_class,
         print(args.mha_only)
         model_config.ffn_only = args.ffn_only
         model_config.mha_only = args.mha_only
+        model_config.step_size = args.step_size
         print(model_config)
     if disable_dropout:
         model_config.dropout = 0.0
@@ -99,7 +101,7 @@ def get_latent_directions(model):
 
 def project_to_subspaces(input_tensor: torch.Tensor, basis: torch.Tensor,
                          repurposed_dims: torch.Tensor, base_dims: torch.Tensor = None,
-                         step_size=None, use_repurposed_dims=True):
+                         step_size=None, use_repurposed_dims=True, i_task=0):
     """
     Project each element in the sequence of input_tensor on the base subspace,
     then traverse the projected element along the repurposed directions.
@@ -150,25 +152,30 @@ def project_to_subspaces(input_tensor: torch.Tensor, basis: torch.Tensor,
 
     if isinstance(step_size, float) or isinstance(step_size, int):
         step_size = torch.tensor([step_size]).to(input_tensor.device)
-
-    repurposed_directions = repurposed_directions.T
-
+    
+    random.seed(i_task)
+    random_direction = random.randint(0, repurposed_dims.size(dim=0))
+    repurposed_direction = repurposed_directions[:,random_direction]
+    #print('repurposed_direction', repurposed_direction.shape)
+    #repurposed_direction = repurposed_direction.T
+    #print('repurposed_direction.T', repurposed_direction.shape)
+    #print('step size', step_size.shape)
     if step_size.dim() == 1:
         # separate same-sized steps on all dims
         #num_steps = step_size.shape[0]
-        edits = torch.einsum('a, df -> adf', step_size, repurposed_directions).to(torch.bfloat16)
-        edits = edits.squeeze(0)
-        #edits = step_size * repurposed_directions
+        #edits = torch.einsum('a, df -> adf', step_size, repurposed_direction).to(torch.bfloat16)
+        #edits = edits.squeeze(0)
+        edits = step_size * repurposed_direction
     elif step_size.dim() == 3:
         # TODO: maybe remove this
         # compound steps, on multiple dims
-        edits = step_size @ repurposed_directions
+        edits = step_size @ repurposed_direction
     else:
         raise NotImplementedError('Cannot edit with these values')
 
-    edit_tensors = base_tensor.unsqueeze(1) + edits
+    edit_tensors = base_tensor + edits
     #print('edit tensor shape', edit_tensors.shape)
-    edit_tensors = edit_tensors.sum(dim=1)
+    #edit_tensors = edit_tensors.sum(dim=1)
     #print('sum edit tensor shape', edit_tensors.shape)
     #print(edit_tensors.dtype)
     #print(batch_size, sequence_length, *edit_tensors.shape[1:])

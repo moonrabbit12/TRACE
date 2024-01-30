@@ -105,6 +105,7 @@ class CL_Base_Model:
             # self.model.tput_timer.update_epoch_count()
 
     def train_one_task_projection(self, task, i_task, epochs, projection_configs):
+        
         # 在单独某个任务上训练
         if self.args.local_rank == -1:
             device = torch.device("cuda")
@@ -126,7 +127,7 @@ class CL_Base_Model:
             for step, batch in enumerate(train_dataloader):
                 del batch['sources']
                 batch = to_device(batch, device)
-                outputs = self.model(**batch, projection_configs=projection_configs, use_cache=False)
+                outputs = self.model(**batch, projection_configs=projection_configs, use_cache=False, i_task=i_task)
                 loss = outputs.loss
                 # Update the description to include current step and loss, if needed
                 if self.args.global_rank == 0:

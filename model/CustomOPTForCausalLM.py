@@ -1272,6 +1272,7 @@ class CustomOPTAttention(nn.Module):
         layer_head_mask: Optional[torch.Tensor] = None,
         output_attentions: bool = False,
         projection_config: Optional[Tuple] = None,
+        i_task: Optional[int] = None,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         """Input shape: Batch x Time x Channel"""
 
@@ -1291,7 +1292,7 @@ class CustomOPTAttention(nn.Module):
         # get query proj
         if self.training and not self.config.ffn_only:
             #print('we are projecting to mha tooooooo')
-            xq = project_to_subspaces(hidden_states, *q_proj_base, use_repurposed_dims=self.config.use_repurposed_dims)
+            xq = project_to_subspaces(hidden_states, *q_proj_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
         query_states = self.q_proj(xq) * self.scaling
         # get key, value proj
         if is_cross_attention and past_key_value is not None:
@@ -1301,15 +1302,15 @@ class CustomOPTAttention(nn.Module):
         elif is_cross_attention:
             # cross_attentions
             if self.training and not self.config.ffn_only:
-                kvsk = project_to_subspaces(key_value_states, *k_proj_base, use_repurposed_dims=self.config.use_repurposed_dims)
-                kvsv = project_to_subspaces(key_value_states, *v_proj_base, use_repurposed_dims=self.config.use_repurposed_dims)
+                kvsk = project_to_subspaces(key_value_states, *k_proj_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
+                kvsv = project_to_subspaces(key_value_states, *v_proj_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
             key_states = self._shape(self.k_proj(kvsk), -1, bsz)
             value_states = self._shape(self.v_proj(kvsv), -1, bsz)
         elif past_key_value is not None:
             # reuse k, v, self_attention
             if self.training and not self.config.ffn_only:
-                xk = project_to_subspaces(hidden_states, *k_proj_base, use_repurposed_dims=self.config.use_repurposed_dims)
-                xv = project_to_subspaces(hidden_states, *v_proj_base, use_repurposed_dims=self.config.use_repurposed_dims)
+                xk = project_to_subspaces(hidden_states, *k_proj_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
+                xv = project_to_subspaces(hidden_states, *v_proj_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
             key_states = self._shape(self.k_proj(xk), -1, bsz)
             value_states = self._shape(self.v_proj(xv), -1, bsz)
             key_states = torch.cat([past_key_value[0], key_states], dim=2)
@@ -1317,8 +1318,8 @@ class CustomOPTAttention(nn.Module):
         else:
             # self_attention
             if self.training and not self.config.ffn_only:
-                xk = project_to_subspaces(hidden_states, *k_proj_base, use_repurposed_dims=self.config.use_repurposed_dims)
-                xv = project_to_subspaces(hidden_states, *v_proj_base, use_repurposed_dims=self.config.use_repurposed_dims)
+                xk = project_to_subspaces(hidden_states, *k_proj_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
+                xv = project_to_subspaces(hidden_states, *v_proj_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
             key_states = self._shape(self.k_proj(xk), -1, bsz)
             value_states = self._shape(self.v_proj(xv), -1, bsz)
 
@@ -1399,7 +1400,7 @@ class CustomOPTAttention(nn.Module):
         # partitioned aross GPUs when using tensor-parallelism.
         attn_output = attn_output.reshape(bsz, tgt_len, self.embed_dim)
         if self.training and not self.config.ffn_only:
-            attn_output = project_to_subspaces(attn_output, *out_proj_base, use_repurposed_dims=self.config.use_repurposed_dims)
+            attn_output = project_to_subspaces(attn_output, *out_proj_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
         attn_output = self.out_proj(attn_output)
 
         return attn_output, attn_weights_reshaped, past_key_value
@@ -1433,6 +1434,7 @@ class CustomOptFlashAttention2(OptFlashAttention2):
         layer_head_mask: Optional[torch.Tensor] = None,
         output_attentions: bool = False,
         projection_config: Optional[Tuple] = None,
+        i_task: Optional[int] = None,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor], Optional[Tuple[torch.Tensor]]]:
         """Input shape: Batch x Time x Channel"""
 
@@ -1451,7 +1453,7 @@ class CustomOptFlashAttention2(OptFlashAttention2):
         # and for k and v too
         print('FLASSSSSSSSSSSSSSSWSHHHHHHHH')
         if self.training and not self.config.ffn_only:
-            x = project_to_subspaces(x, *q_proj_base, use_repurposed_dims=self.config.use_repurposed_dims)
+            x = project_to_subspaces(x, *q_proj_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
             
         query_states = self.q_proj(x)
 
@@ -1463,7 +1465,7 @@ class CustomOptFlashAttention2(OptFlashAttention2):
         elif is_cross_attention:
             # cross_attentions
             if self.training and not self.config.ffn_only:
-                y = project_to_subspaces(y, *k_proj_base, use_repurposed_dims=self.config.use_repurposed_dims)
+                y = project_to_subspaces(y, *k_proj_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
             key_states = self._shape(self.k_proj(y), -1, bsz)
             value_states = self._shape(self.v_proj(y), -1, bsz)
         elif past_key_value is not None:
@@ -1471,8 +1473,8 @@ class CustomOptFlashAttention2(OptFlashAttention2):
             xk = hidden_states
             xv = hidden_states
             if self.training and not self.config.ffn_only:
-                xk = project_to_subspaces(hidden_states, *k_proj_base, use_repurposed_dims=self.config.use_repurposed_dims)
-                xv = project_to_subspaces(hidden_states, *v_proj_base, use_repurposed_dims=self.config.use_repurposed_dims)
+                xk = project_to_subspaces(hidden_states, *k_proj_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
+                xv = project_to_subspaces(hidden_states, *v_proj_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
             key_states = self._shape(self.k_proj(xk), -1, bsz)
             value_states = self._shape(self.v_proj(xv), -1, bsz)
             key_states = torch.cat([past_key_value[0], key_states], dim=2)
@@ -1482,8 +1484,8 @@ class CustomOptFlashAttention2(OptFlashAttention2):
             xk = hidden_states
             xv = hidden_states
             if self.training and not self.config.ffn_only:
-                xk = project_to_subspaces(hidden_states, *k_proj_base, use_repurposed_dims=self.config.use_repurposed_dims)
-                xv = project_to_subspaces(hidden_states, *v_proj_base, use_repurposed_dims=self.config.use_repurposed_dims)
+                xk = project_to_subspaces(hidden_states, *k_proj_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
+                xv = project_to_subspaces(hidden_states, *v_proj_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
             key_states = self._shape(self.k_proj(xk), -1, bsz)
             value_states = self._shape(self.v_proj(xv), -1, bsz)
 
@@ -1535,7 +1537,7 @@ class CustomOptFlashAttention2(OptFlashAttention2):
 
         attn_weights_reshaped = attn_output.reshape(bsz, query_length, self.num_heads * self.head_dim)
         if self.training and not self.config.ffn_only:
-            attn_weights_reshaped = project_to_subspaces(attn_weights_reshaped, *out_proj_base, use_repurposed_dims=self.config.use_repurposed_dims)
+            attn_weights_reshaped = project_to_subspaces(attn_weights_reshaped, *out_proj_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, seed=self.config.seed)
         attn_output = self.out_proj(attn_weights_reshaped)
 
         if not output_attentions:
@@ -1680,6 +1682,7 @@ class CustomOPTDecoderLayer(OPTDecoderLayer):
         output_attentions: Optional[bool] = False,
         use_cache: Optional[bool] = False,
         projection_config: Optional[Tuple] = None,
+        i_task: Optional[int] = None,
     ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
         """
         Args:
@@ -1712,7 +1715,8 @@ class CustomOPTDecoderLayer(OPTDecoderLayer):
             attention_mask=attention_mask,
             layer_head_mask=layer_head_mask,
             output_attentions=output_attentions,
-            projection_config=projection_config
+            projection_config=projection_config,
+            i_task=i_task
         )
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
         hidden_states = residual + hidden_states
@@ -1732,12 +1736,12 @@ class CustomOPTDecoderLayer(OPTDecoderLayer):
 
         if self.training and not self.config.mha_only:
             #print('wr are projecting to FFN')
-            hidden_states = project_to_subspaces(hidden_states, *fc1_base, use_repurposed_dims=self.config.use_repurposed_dims)
+            hidden_states = project_to_subspaces(hidden_states, *fc1_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
         hidden_states = self.fc1(hidden_states)
         hidden_states = self.activation_fn(hidden_states)
 
         if self.training and not self.config.mha_only:
-            hidden_states = project_to_subspaces(hidden_states, *fc2_base, use_repurposed_dims=self.config.use_repurposed_dims)
+            hidden_states = project_to_subspaces(hidden_states, *fc2_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
         hidden_states = self.fc2(hidden_states)
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
 
@@ -1821,7 +1825,8 @@ class CustomOPTDecoder(OPTDecoder):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-        projection_configs: Optional[Tuple] = None,        
+        projection_configs: Optional[Tuple] = None,
+        i_task: Optional[int] = None,        
     ) -> Union[Tuple, BaseModelOutputWithPast]:
         r"""
         Args:
@@ -1972,7 +1977,8 @@ class CustomOPTDecoder(OPTDecoder):
                     None,
                     output_attentions,
                     use_cache,
-                    projection_config
+                    projection_config,
+                    i_task
                 )
             else:
                 layer_outputs = decoder_layer(
@@ -2047,7 +2053,8 @@ class CustomOPTModel(OPTModel):
         output_attentions: Optional[bool] = None,
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
-        projection_configs: Optional[Tuple] = None,        
+        projection_configs: Optional[Tuple] = None,
+        i_task: Optional[int] = None,        
     ) -> Union[Tuple, BaseModelOutputWithPast]:
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
@@ -2068,6 +2075,7 @@ class CustomOPTModel(OPTModel):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
             projection_configs=projection_configs,
+            i_task=i_task
         )
 
         if not return_dict:
@@ -2125,6 +2133,7 @@ class CustomOPTForCausalLM(OPTForCausalLM):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
         projection_configs: Optional[Tuple] = None,
+        i_task: Optional[int] = None,
     ) -> Union[Tuple, CausalLMOutputWithPast]:
         r"""
         Args:
@@ -2217,7 +2226,8 @@ class CustomOPTForCausalLM(OPTForCausalLM):
             output_attentions=output_attentions,
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
-            projection_configs=projection_configs
+            projection_configs=projection_configs,
+            i_task=i_task
         )
 
         logits = self.lm_head(outputs[0]).contiguous()

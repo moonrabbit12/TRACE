@@ -940,15 +940,15 @@ class CustomBloomMLP(BloomMLP):
         self.dense_4h_to_h = nn.Linear(4 * hidden_size, hidden_size)
         self.hidden_dropout = config.hidden_dropout
 
-    def forward(self, hidden_states: torch.Tensor, residual: torch.Tensor, projection_config: Optional[Tuple] = None) -> torch.Tensor:
+    def forward(self, hidden_states: torch.Tensor, residual: torch.Tensor, projection_config: Optional[Tuple] = None, i_task: Optional[int] = None) -> torch.Tensor:
         _, _, dense_h_to_4h_base, dense_4h_to_h_base = projection_config
         if self.training and not self.config.mha_only:
-            hidden_states = project_to_subspaces(hidden_states, *dense_h_to_4h_base, use_repurposed_dims=self.config.use_repurposed_dims)
+            hidden_states = project_to_subspaces(hidden_states, *dense_h_to_4h_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
         hidden_states = self.gelu_impl(self.dense_h_to_4h(hidden_states))
 
         if self.pretraining_tp > 1 and self.slow_but_exact:
             if self.training and not self.config.mha_only:
-                hidden_states = project_to_subspaces(hidden_states, *dense_4h_to_h_base, use_repurposed_dims=self.config.use_repurposed_dims)
+                hidden_states = project_to_subspaces(hidden_states, *dense_4h_to_h_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
             intermediate_output = torch.zeros_like(residual)
             slices = self.dense_4h_to_h.weight.shape[-1] / self.pretraining_tp
             for i in range(self.pretraining_tp):
@@ -958,7 +958,7 @@ class CustomBloomMLP(BloomMLP):
                 )
         else:
             if self.training and not self.config.mha_only:
-                hidden_states = project_to_subspaces(hidden_states, *dense_4h_to_h_base, use_repurposed_dims=self.config.use_repurposed_dims)
+                hidden_states = project_to_subspaces(hidden_states, *dense_4h_to_h_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
             intermediate_output = self.dense_4h_to_h(hidden_states)
 
         output = dropout_add(intermediate_output, residual, self.hidden_dropout, self.training)
@@ -1048,10 +1048,11 @@ class CustomBloomAttention(BloomAttention):
         use_cache: bool = False,
         output_attentions: bool = False,
         projection_config: Optional[Tuple] = None,
+        i_task: Optional[int] = None,
     ):
         query_key_value_base, dense_base, _, _ = projection_config
         if self.training and not self.config.ffn_only:
-            hidden_states = project_to_subspaces(hidden_states, *query_key_value_base, use_repurposed_dims=self.config.use_repurposed_dims)
+            hidden_states = project_to_subspaces(hidden_states, *query_key_value_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
 
         fused_qkv = self.query_key_value(hidden_states)  # [batch_size, seq_length, 3 x hidden_size]
 
@@ -1116,7 +1117,7 @@ class CustomBloomAttention(BloomAttention):
         # aggregate results across tp ranks. See here: https://github.com/pytorch/pytorch/issues/76232
         if self.pretraining_tp > 1 and self.slow_but_exact:
             if self.training and not self.config.ffn_only:
-                context_layer = project_to_subspaces(context_layer, *dense_base, use_repurposed_dims=self.config.use_repurposed_dims)
+                context_layer = project_to_subspaces(context_layer, *dense_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
             slices = self.hidden_size / self.pretraining_tp
             output_tensor = torch.zeros_like(context_layer)
             for i in range(self.pretraining_tp):
@@ -1126,7 +1127,7 @@ class CustomBloomAttention(BloomAttention):
                 )
         else:
             if self.training and not self.config.ffn_only:
-                context_layer = project_to_subspaces(context_layer, *dense_base, use_repurposed_dims=self.config.use_repurposed_dims)
+                context_layer = project_to_subspaces(context_layer, *dense_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
             output_tensor = self.dense(context_layer)
 
         output_tensor = dropout_add(output_tensor, residual, self.hidden_dropout, self.training)
@@ -1163,6 +1164,7 @@ class CustomBloomBlock(BloomBlock):
         use_cache: bool = False,
         output_attentions: bool = False,
         projection_config: Optional[Tuple] = None,
+        i_task: Optional[int] = None,
     ):
         # hidden_states: [batch_size, seq_length, hidden_size]
 
@@ -1186,7 +1188,8 @@ class CustomBloomBlock(BloomBlock):
                 head_mask=head_mask,
                 use_cache=use_cache,
                 output_attentions=output_attentions,
-                projection_config=projection_config)
+                projection_config=projection_config,
+                i_task=i_task)
         else:
             attn_outputs = self.self_attention(
             layernorm_output,
@@ -1212,7 +1215,7 @@ class CustomBloomBlock(BloomBlock):
 
         # MLP.
         if self.training:
-            output = self.mlp(layernorm_output, residual, projection_config)
+            output = self.mlp(layernorm_output, residual, projection_config, i_task=i_task)
         else:
             output = self.mlp(layernorm_output, residual)
 
@@ -1273,6 +1276,7 @@ class CustomBloomModel(BloomModel):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
         projection_configs: Optional[Tuple] = None,
+        i_task: Optional[int] = None,
         **deprecated_arguments,
     ) -> Union[Tuple[torch.Tensor, ...], BaseModelOutputWithPastAndCrossAttentions]:
         if deprecated_arguments.pop("position_ids", False) is not False:
@@ -1366,6 +1370,7 @@ class CustomBloomModel(BloomModel):
                     use_cache,
                     output_attentions,
                     projection_config,
+                    i_task,
                 )
             else:
                 outputs = block(
@@ -1478,6 +1483,7 @@ class CustomBloomForCausalLM(BloomForCausalLM):
         output_hidden_states: Optional[bool] = None,
         return_dict: Optional[bool] = None,
         projection_configs: Optional[Tuple] = None,
+        i_task: Optional[int] = None,
         **deprecated_arguments,
     ) -> Union[Tuple[torch.Tensor], CausalLMOutputWithCrossAttentions]:
         r"""
@@ -1509,6 +1515,7 @@ class CustomBloomForCausalLM(BloomForCausalLM):
             output_hidden_states=output_hidden_states,
             return_dict=return_dict,
             projection_configs=projection_configs,
+            i_task=i_task
         )
         hidden_states = transformer_outputs[0]
 

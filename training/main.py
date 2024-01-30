@@ -73,6 +73,10 @@ def str2bool(v):
     else:
         raise argparse.ArgumentTypeError('Boolean value expected.')
 
+def none_or_int(value):
+    if value == 'None':
+        return None
+    return int(value)
 
 def parse_args():
     def list_of_strings(arg):
@@ -206,6 +210,10 @@ def parse_args():
     parser.add_argument('--print_loss',
                         action='store_true',
                         help='Prints loss at each step.')
+    parser.add_argument('--proj_config_path',
+                        type=str,
+                        default=None,
+                        help='path to proj config pickles')
     # added by wangxiao
     parser.add_argument('--CL_method',
                 default=None,
@@ -226,7 +234,10 @@ def parse_args():
     parser.add_argument('--mha_only',
                         type=str2bool,
                         help='Project only mha. Set this flag if you want to enable it.')
-
+    parser.add_argument('--step_size',
+                        type=none_or_int,
+                        default=None,
+                        help='Step size of affine shift')
     print('here is parser')
     print(parser)
     parser = deepspeed.add_config_arguments(parser)
@@ -304,7 +315,7 @@ def main():
                                     )
         repurposed_dims_size = args.repurpose_dim_size
         projection_configs = None
-        PROJ_CONFIG_PATH = args.model + '_' + str(args.repurpose_dim_size) + '_proj_config.pkl'
+        PROJ_CONFIG_PATH = args.proj_config_path + args.model + '_' + str(args.repurpose_dim_size) + '_proj_config.pkl'
         if not os.path.exists(PROJ_CONFIG_PATH):
             if 'vicuna' in args.model_name_or_path:
                 projection_config = generate_basis_pipeline(model, repurposed_dims_size)
