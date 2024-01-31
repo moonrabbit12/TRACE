@@ -99,8 +99,8 @@ def get_latent_directions(model):
 
 
 
-def project_to_subspaces(input_tensor: torch.Tensor, basis: torch.Tensor,
-                         repurposed_dims: torch.Tensor, base_dims: torch.Tensor = None,
+def project_to_subspaces(input_tensor: torch.Tensor, basis: torch.tensor, 
+                         repurposed_directions: torch.tensor, base_directions: torch.tensor,
                          step_size=None, use_repurposed_dims=True, i_task=0):
     """
     Project each element in the sequence of input_tensor on the base subspace,
@@ -120,9 +120,9 @@ def project_to_subspaces(input_tensor: torch.Tensor, basis: torch.Tensor,
         input_tensor = input_tensor.unsqueeze(dim=0)
     batch_size, sequence_length, hidden_size = input_tensor.shape
 
-    if base_dims is None:
+    #if base_dims is None:
         # Take all non-repurposed dims to span the base subspace -- default mode
-        base_dims = torch.tensor([x for x in range(hidden_size) if x not in repurposed_dims])
+    #    base_dims = torch.tensor([x for x in range(hidden_size) if x not in repurposed_dims])
 
     # Use values instead of boolean to change order as needed
     #print('basis shape', basis.shape)
@@ -130,21 +130,21 @@ def project_to_subspaces(input_tensor: torch.Tensor, basis: torch.Tensor,
     #print('repurposed dimensions shape', repurposed_dims.shape)
     
     # TODO: check if the components/axes are correct
-    repurposed_directions = basis[:, repurposed_dims].to(input_tensor.device)
-    base_directions = basis[:, base_dims].to(input_tensor.device)
+    #repurposed_directions = basis[:, repurposed_dims].to(input_tensor.device)
+    #base_directions = basis[:, base_dims].to(input_tensor.device)
 
     # Reshape input_tensor to merge batch and sequence dimensions
     reshaped_tensor = input_tensor.view(-1, hidden_size)
 
     # Project the reshaped tensor
-    if use_repurposed_dims:
+    #if use_repurposed_dims:
         # project to dormant subspace
-        projected_tensor = reshaped_tensor @ repurposed_directions
-        base_tensor = projected_tensor @ repurposed_directions.T
-    else:
+    #    projected_tensor = reshaped_tensor @ repurposed_directions
+    #    base_tensor = projected_tensor @ repurposed_directions.T
+    #else:
         # project to strong/dominant/base subspace
-        projected_tensor = reshaped_tensor @ base_directions
-        base_tensor = projected_tensor @ base_directions.T
+    projected_tensor = reshaped_tensor @ base_directions
+    base_tensor = projected_tensor @ base_directions.T
 
     if step_size is None:
         # Reshape back to original dimensions and return
@@ -154,8 +154,8 @@ def project_to_subspaces(input_tensor: torch.Tensor, basis: torch.Tensor,
         step_size = torch.tensor([step_size]).to(input_tensor.device)
     
     random.seed(i_task)
-    random_direction = random.randint(0, repurposed_dims.size(dim=0))
-    repurposed_direction = repurposed_directions[:,random_direction]
+    random_direction = random.randint(0, repurposed_directions.shape[1])
+    repurposed_direction = repurposed_directions[:, random_direction]
     #print('repurposed_direction', repurposed_direction.shape)
     #repurposed_direction = repurposed_direction.T
     #print('repurposed_direction.T', repurposed_direction.shape)
@@ -166,12 +166,13 @@ def project_to_subspaces(input_tensor: torch.Tensor, basis: torch.Tensor,
         #edits = torch.einsum('a, df -> adf', step_size, repurposed_direction).to(torch.bfloat16)
         #edits = edits.squeeze(0)
         edits = step_size * repurposed_direction
-    elif step_size.dim() == 3:
-        # TODO: maybe remove this
-        # compound steps, on multiple dims
-        edits = step_size @ repurposed_direction
     else:
         raise NotImplementedError('Cannot edit with these values')
+
+    #elif step_size.dim() == 3:
+        # TODO: maybe remove this
+        # compound steps, on multiple dims
+    #    edits = step_size @ repurposed_direction
 
     edit_tensors = base_tensor + edits
     #print('edit tensor shape', edit_tensors.shape)
@@ -181,7 +182,7 @@ def project_to_subspaces(input_tensor: torch.Tensor, basis: torch.Tensor,
     #print(batch_size, sequence_length, *edit_tensors.shape[1:])
     #edit_tensors = edit_tensors.view(-1, hidden_size)  # Flatten for reshaping
     # Reshape back to [batch_size, sequence_length, hidden_size, ...]
-    return edit_tensors.view(batch_size, sequence_length, *edit_tensors.shape[1:])
+    return edit_tensors.view(batch_size, sequence_length, hidden_size)
 
 def projection_pipeline(input_tensor, layer):
     basis = get_latent_directions_module(layer)
@@ -231,27 +232,51 @@ def generate_basis_for_opt(model, repurposed_dims_size):
         if 'k_proj.weight' in name:
             print(name, param)
             hidden_size = param.shape[1]
-            k_proj_bases.append((get_latent_directions_module(param), torch.arange(hidden_size - repurposed_dims_size, hidden_size)))
+            repurposed_dims = torch.arange(hidden_size - repurpose_dim_size, hidden_size)
+            base_dims = torch.tensor([x for x in range(hidden_size) if x not in repurposed_dims])
+            repurposed_directions = basis[:, repurposed_dims]
+            base_directions = basis[:, base_dims]
+            k_proj_bases.append((get_latent_directions_module(param), repurposed_directions, base_directions))
         elif 'v_proj.weight' in name:
             print(name, param)
             hidden_size = param.shape[1]
-            v_proj_bases.append((get_latent_directions_module(param), torch.arange(hidden_size - repurposed_dims_size, hidden_size)))
+            repurposed_dims = torch.arange(hidden_size - repurpose_dim_size, hidden_size)
+            base_dims = torch.tensor([x for x in range(hidden_size) if x not in repurposed_dims])
+            repurposed_directions = basis[:, repurposed_dims]
+            base_directions = basis[:, base_dims]
+            v_proj_bases.append((get_latent_directions_module(param), repurposed_directions, base_directions))
         elif 'q_proj.weight' in name:
             print(name, param)
             hidden_size = param.shape[1]
-            q_proj_bases.append((get_latent_directions_module(param), torch.arange(hidden_size - repurposed_dims_size, hidden_size)))
+            repurposed_dims = torch.arange(hidden_size - repurpose_dim_size, hidden_size)
+            base_dims = torch.tensor([x for x in range(hidden_size) if x not in repurposed_dims])
+            repurposed_directions = basis[:, repurposed_dims]
+            base_directions = basis[:, base_dims]
+            q_proj_bases.append((get_latent_directions_module(param), repurposed_directions, base_directions))
         elif 'out_proj.weight' in name:
             print(name, param)
             hidden_size = param.shape[1]
-            out_proj_bases.append((get_latent_directions_module(param), torch.arange(hidden_size - repurposed_dims_size, hidden_size)))
+            repurposed_dims = torch.arange(hidden_size - repurpose_dim_size, hidden_size)
+            base_dims = torch.tensor([x for x in range(hidden_size) if x not in repurposed_dims])
+            repurposed_directions = basis[:, repurposed_dims]
+            base_directions = basis[:, base_dims]
+            out_proj_bases.append((get_latent_directions_module(param), repurposed_directions, base_directions))
         elif 'fc1.weight' in name:
             print(name, param)
             hidden_size = param.shape[1]
-            fc1_bases.append((get_latent_directions_module(param), torch.arange(hidden_size - repurposed_dims_size, hidden_size)))
+            repurposed_dims = torch.arange(hidden_size - repurpose_dim_size, hidden_size)
+            base_dims = torch.tensor([x for x in range(hidden_size) if x not in repurposed_dims])
+            repurposed_directions = basis[:, repurposed_dims]
+            base_directions = basis[:, base_dims]
+            fc1_bases.append((get_latent_directions_module(param), repurposed_directions, base_directions))
         elif 'fc2.weight' in name:
             print(name, param)
             hidden_size = param.shape[1]
-            fc2_bases.append((get_latent_directions_module(param), torch.arange(hidden_size - repurposed_dims_size, hidden_size)))
+            repurposed_dims = torch.arange(hidden_size - repurpose_dim_size, hidden_size)
+            base_dims = torch.tensor([x for x in range(hidden_size) if x not in repurposed_dims])
+            repurposed_directions = basis[:, repurposed_dims]
+            base_directions = basis[:, base_dims]
+            fc2_bases.append((get_latent_directions_module(param), repurposed_directions, base_directions))
         else:
             continue
 
@@ -271,17 +296,33 @@ def generate_basis_for_bloom(model, repurpose_dim_size):
         if 'query_key_value.weight' in name:
             print(name, param)
             hidden_size = param.shape[1]
-            query_key_value_bases.append((get_latent_directions_module(param), torch.arange(hidden_size - repurpose_dim_size, hidden_size)))
+            repurposed_dims = torch.arange(hidden_size - repurpose_dim_size, hidden_size)
+            base_dims = torch.tensor([x for x in range(hidden_size) if x not in repurposed_dims])
+            repurposed_directions = basis[:, repurposed_dims]
+            base_directions = basis[:, base_dims]
+            query_key_value_bases.append((get_latent_directions_module(param), repurposed_directions, base_directions))
         elif 'dense.weight' in name:
             print(name, param)
             hidden_size = param.shape[1]  
-            dense_bases.append((get_latent_directions_module(param), torch.arange(hidden_size - repurpose_dim_size, hidden_size)))          
+            repurposed_dims = torch.arange(hidden_size - repurpose_dim_size, hidden_size)
+            base_dims = torch.tensor([x for x in range(hidden_size) if x not in repurposed_dims])
+            repurposed_directions = basis[:, repurposed_dims]
+            base_directions = basis[:, base_dims]
+            dense_bases.append((get_latent_directions_module(param), repurposed_directions, base_directions))          
         elif 'dense_h_to_4h.weight' in name:
             print(name, param)
             hidden_size = param.shape[1]
-            dense_h_to_4h_bases.append((get_latent_directions_module(param), torch.arange(hidden_size - repurpose_dim_size, hidden_size)))
+            repurposed_dims = torch.arange(hidden_size - repurpose_dim_size, hidden_size)
+            base_dims = torch.tensor([x for x in range(hidden_size) if x not in repurposed_dims])
+            repurposed_directions = basis[:, repurposed_dims]
+            base_directions = basis[:, base_dims]
+            dense_h_to_4h_bases.append((get_latent_directions_module(param), repurposed_directions, base_directions))
         elif 'dense_4h_to_h.weight' in name:
             print(name, param)
             hidden_size = param.shape[1]
-            dense_4h_to_h_bases.append((get_latent_directions_module(param), torch.arange(hidden_size - repurpose_dim_size, hidden_size)))
+            repurposed_dims = torch.arange(hidden_size - repurpose_dim_size, hidden_size)
+            base_dims = torch.tensor([x for x in range(hidden_size) if x not in repurposed_dims])
+            repurposed_directions = basis[:, repurposed_dims]
+            base_directions = basis[:, base_dims]
+            dense_4h_to_h_bases.append((get_latent_directions_module(param), repurposed_directions, base_directions))
     return (query_key_value_bases, dense_bases, dense_h_to_4h_bases, dense_4h_to_h_bases)

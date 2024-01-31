@@ -571,7 +571,7 @@ def main():
     # Assuming projection_configs is a tuple of lists of tensors
     if args.CL_method == 'SVD':
         projection_configs = tuple(
-            [(a.to(device), b.to(device)) for a,b in config_list] for config_list in projection_configs
+            [(a.to(device), b.to(device), c.to(device)) for a,b,c in config_list] for config_list in projection_configs
         )
 
     # Now projection_configs_updated contains tensors that are all on the same device as the model
