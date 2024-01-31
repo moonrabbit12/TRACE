@@ -234,6 +234,12 @@ def parse_args():
     parser.add_argument('--mha_only',
                         type=str2bool,
                         help='Project only mha. Set this flag if you want to enable it.')
+    parser.add_argument('--qk_only',
+                        type=str2bool,
+                        help='Project only qk circuit. Set this flag if you want to enable it.')
+    parser.add_argument('--ov_only',
+                        type=str2bool,
+                        help='Project only ov circuit. Set this flag if you want to enable it.')
     parser.add_argument('--step_size',
                         type=none_or_int,
                         default=None,

@@ -34,6 +34,8 @@ def create_hf_model(model_class,
         print(args.mha_only)
         model_config.ffn_only = args.ffn_only
         model_config.mha_only = args.mha_only
+        model_config.qk_only = args.qk_only
+        model_config.ov_only = args.ov_only
         model_config.step_size = args.step_size
         print(model_config)
     if disable_dropout:
