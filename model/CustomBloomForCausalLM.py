@@ -942,12 +942,12 @@ class CustomBloomMLP(BloomMLP):
 
     def forward(self, hidden_states: torch.Tensor, residual: torch.Tensor, projection_config: Optional[Tuple] = None, i_task: Optional[int] = None) -> torch.Tensor:
         _, _, dense_h_to_4h_base, dense_4h_to_h_base = projection_config
-        if self.training and not self.config.mha_only:
+        if self.training and not self.config.mha_only and not self.config.qk_only and not self.config.ov_only:
             hidden_states = project_to_subspaces(hidden_states, *dense_h_to_4h_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
         hidden_states = self.gelu_impl(self.dense_h_to_4h(hidden_states))
 
         if self.pretraining_tp > 1 and self.slow_but_exact:
-            if self.training and not self.config.mha_only:
+            if self.training and not self.config.mha_only and not self.config.qk_only and not self.config.ov_only:
                 hidden_states = project_to_subspaces(hidden_states, *dense_4h_to_h_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
             intermediate_output = torch.zeros_like(residual)
             slices = self.dense_4h_to_h.weight.shape[-1] / self.pretraining_tp
@@ -957,7 +957,7 @@ class CustomBloomMLP(BloomMLP):
                     self.dense_4h_to_h.weight[:, int(i * slices) : int((i + 1) * slices)],
                 )
         else:
-            if self.training and not self.config.mha_only:
+            if self.training and not self.config.mha_only and not self.config.qk_only and not self.config.ov_only:
                 hidden_states = project_to_subspaces(hidden_states, *dense_4h_to_h_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
             intermediate_output = self.dense_4h_to_h(hidden_states)
 

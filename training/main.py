@@ -573,7 +573,7 @@ def main():
     # print_rank_0(f"ppl: {perplexity}", args.global_rank)
 
     device = model.device  # Get the device from DeepSpeed model engine
-
+    print(device)
     # Assuming projection_configs is a tuple of lists of tensors
     if args.CL_method == 'SVD':
         projection_configs = tuple(
