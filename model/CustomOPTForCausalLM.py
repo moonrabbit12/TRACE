@@ -495,7 +495,7 @@ class OPTDecoderLayer(nn.Module):
         super().__init__()
         self.embed_dim = config.hidden_size
 
-        self.self_attn = OPT_ATTENTION_CLASSES[config._attn_implementation](config=config, is_decoder=True)
+        self.self_attn = OPT_ATTENTION_CLASSES[OPT_MAP[config._attn_implementation]](config=config, is_decoder=True)
 
         self.do_layer_norm_before = config.do_layer_norm_before
         self.dropout = config.dropout
@@ -516,6 +516,8 @@ class OPTDecoderLayer(nn.Module):
         past_key_value: Optional[Tuple[torch.Tensor]] = None,
         output_attentions: Optional[bool] = False,
         use_cache: Optional[bool] = False,
+        projection_configs: Optional[Tuple] = None,
+        i_task: Optional[int] = None,   
     ) -> Tuple[torch.FloatTensor, Optional[Tuple[torch.FloatTensor, torch.FloatTensor]]]:
         """
         Args:
@@ -1290,7 +1292,7 @@ class CustomOPTAttention(nn.Module):
         kvsk = key_value_states
         kvsv = key_value_states
         # get query proj
-        if self.training and not self.config.ffn_only and not self.config.ov_only:
+        if not self.config.ffn_only and not self.config.ov_only:
             #print('we are projecting to mha tooooooo')
             xq = project_to_subspaces(hidden_states, *q_proj_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
         query_states = self.q_proj(xq) * self.scaling
@@ -1303,17 +1305,16 @@ class CustomOPTAttention(nn.Module):
             # cross_attentions
             # TODO: think about how to implement qk and ov circuit flags for cross attention
             print('cross attention')
-            if self.training and not self.config.ffn_only:
+            if not self.config.ffn_only:
                 kvsk = project_to_subspaces(key_value_states, *k_proj_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
                 kvsv = project_to_subspaces(key_value_states, *v_proj_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
             key_states = self._shape(self.k_proj(kvsk), -1, bsz)
             value_states = self._shape(self.v_proj(kvsv), -1, bsz)
         elif past_key_value is not None:
             # reuse k, v, self_attention
-            print('reuse k v self attention')
-            if self.training and not self.config.ffn_only and not self.config.ov_only:
+            if not self.config.ffn_only and not self.config.ov_only:
                 xk = project_to_subspaces(hidden_states, *k_proj_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
-            if self.training and not self.config.ffn_only and not self.config.qk_only:
+            if not self.config.ffn_only and not self.config.qk_only:
                 xv = project_to_subspaces(hidden_states, *v_proj_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
             key_states = self._shape(self.k_proj(xk), -1, bsz)
             value_states = self._shape(self.v_proj(xv), -1, bsz)
@@ -1321,9 +1322,9 @@ class CustomOPTAttention(nn.Module):
             value_states = torch.cat([past_key_value[1], value_states], dim=2)
         else:
             # self_attention
-            if self.training and not self.config.ffn_only and not self.config.ov_only:
+            if not self.config.ffn_only and not self.config.ov_only:
                 xk = project_to_subspaces(hidden_states, *k_proj_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)  
-            if self.training and not self.config.ffn_only and not self.config.qk_only:
+            if not self.config.ffn_only and not self.config.qk_only:
                 xv = project_to_subspaces(hidden_states, *v_proj_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
             key_states = self._shape(self.k_proj(xk), -1, bsz)
             value_states = self._shape(self.v_proj(xv), -1, bsz)
@@ -1404,7 +1405,7 @@ class CustomOPTAttention(nn.Module):
         # Use the `embed_dim` from the config (stored in the class) rather than `hidden_state` because `attn_output` can be
         # partitioned aross GPUs when using tensor-parallelism.
         attn_output = attn_output.reshape(bsz, tgt_len, self.embed_dim)
-        if self.training and not self.config.ffn_only and not self.config.qk_only:
+        if  not self.config.ffn_only and not self.config.qk_only:
             attn_output = project_to_subspaces(attn_output, *out_proj_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
         attn_output = self.out_proj(attn_output)
 
@@ -1457,7 +1458,7 @@ class CustomOptFlashAttention2(OptFlashAttention2):
         #TODO: think if svd_proj, then q_proj makes sense...? 
         # and for k and v too
         print('FLASSSSSSSSSSSSSSSWSHHHHHHHH')
-        if self.training and not self.config.ffn_only and not self.config.ov_only:
+        if not self.config.ffn_only and not self.config.ov_only:
             x = project_to_subspaces(x, *q_proj_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
             
         query_states = self.q_proj(x)
@@ -1471,7 +1472,7 @@ class CustomOptFlashAttention2(OptFlashAttention2):
             # cross_attentions
             # TODO: think about how to implement qk and ov circuit projection
             print('cross attention')
-            if self.training and not self.config.ffn_only:
+            if not self.config.ffn_only:
                 y = project_to_subspaces(y, *k_proj_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
             key_states = self._shape(self.k_proj(y), -1, bsz)
             value_states = self._shape(self.v_proj(y), -1, bsz)
@@ -1479,9 +1480,9 @@ class CustomOptFlashAttention2(OptFlashAttention2):
             # reuse k, v, self_attention
             xk = hidden_states
             xv = hidden_states
-            if self.training and not self.config.ffn_only and not self.config.ov_only:
+            if not self.config.ffn_only and not self.config.ov_only:
                 xk = project_to_subspaces(hidden_states, *k_proj_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
-            if self.training and not self.config.ffn_only and not self.config.qk_only:
+            if not self.config.ffn_only and not self.config.qk_only:
                 xv = project_to_subspaces(hidden_states, *v_proj_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
             key_states = self._shape(self.k_proj(xk), -1, bsz)
             value_states = self._shape(self.v_proj(xv), -1, bsz)
@@ -1491,9 +1492,9 @@ class CustomOptFlashAttention2(OptFlashAttention2):
             # self_attention
             xk = hidden_states
             xv = hidden_states
-            if self.training and not self.config.ffn_only and not self.config.ov_only:
+            if not self.config.ffn_only and not self.config.ov_only:
                 xk = project_to_subspaces(hidden_states, *k_proj_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
-            if self.training and not self.config.ffn_only and not self.config.qk_only:
+            if not self.config.ffn_only and not self.config.qk_only:
                 xv = project_to_subspaces(hidden_states, *v_proj_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
             key_states = self._shape(self.k_proj(xk), -1, bsz)
             value_states = self._shape(self.v_proj(xv), -1, bsz)
@@ -1545,7 +1546,7 @@ class CustomOptFlashAttention2(OptFlashAttention2):
         )
 
         attn_weights_reshaped = attn_output.reshape(bsz, query_length, self.num_heads * self.head_dim)
-        if self.training and not self.config.ffn_only and not self.config.qk_only:
+        if not self.config.ffn_only and not self.config.qk_only:
             attn_weights_reshaped = project_to_subspaces(attn_weights_reshaped, *out_proj_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, seed=self.config.seed)
         attn_output = self.out_proj(attn_weights_reshaped)
 
@@ -1654,10 +1655,13 @@ class CustomOptFlashAttention2(OptFlashAttention2):
         )
 
 
-
+OPT_MAP = {
+    "eager": "eagerOG"
+}
 
 OPT_ATTENTION_CLASSES = {
     "eager": CustomOPTAttention,
+    "eagerOG": OPTAttention,
     "flash_attention_2": CustomOptFlashAttention2,
 }
 
@@ -1743,13 +1747,13 @@ class CustomOPTDecoderLayer(OPTDecoderLayer):
         if self.do_layer_norm_before:
             hidden_states = self.final_layer_norm(hidden_states)
 
-        if self.training and not self.config.mha_only and not self.config.qk_only and not self.config.ov_only:
+        if not self.config.mha_only and not self.config.qk_only and not self.config.ov_only:
             #print('wr are projecting to FFN')
             hidden_states = project_to_subspaces(hidden_states, *fc1_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
         hidden_states = self.fc1(hidden_states)
         hidden_states = self.activation_fn(hidden_states)
 
-        if self.training and not self.config.mha_only and not self.config.qk_only and not self.config.ov_only:
+        if not self.config.mha_only and not self.config.qk_only and not self.config.ov_only:
             hidden_states = project_to_subspaces(hidden_states, *fc2_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
         hidden_states = self.fc2(hidden_states)
         hidden_states = nn.functional.dropout(hidden_states, p=self.dropout, training=self.training)
@@ -1809,13 +1813,21 @@ class CustomOPTDecoder(OPTDecoder):
             )
         else:
             self.final_layer_norm = None
+        
+        
+        if config.project_only_first_layer:
+            self.layers = nn.ModuleList([OPTDecoderLayer(config) for _ in range(config.num_hidden_layers-1)])
+            self.layers = nn.ModuleList([CustomOPTDecoderLayer(config), *self.layers])
+        else:
+            self.layers = nn.ModuleList([CustomOPTDecoderLayer(config) for _ in range(config.num_hidden_layers)])
 
-        self.layers = nn.ModuleList([CustomOPTDecoderLayer(config) for _ in range(config.num_hidden_layers)])
         self._use_flash_attention_2 = config._attn_implementation == "flash_attention_2"
 
         self.gradient_checkpointing = False
         # Initialize weights and apply final processing
         self.post_init()
+        self.i_task = None
+        self.projection_configs = None
 
     def get_input_embeddings(self):
         return self.embed_tokens
@@ -1884,6 +1896,11 @@ class CustomOPTDecoder(OPTDecoder):
             return_dict (`bool`, *optional*):
                 Whether or not to return a [`~utils.ModelOutput`] instead of a plain tuple.
         """
+        if self.i_task is not None:
+            i_task = self.i_task
+        if self.projection_configs is not None:
+            projection_configs = self.projection_configs
+
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
             output_hidden_states if output_hidden_states is not None else self.config.output_hidden_states
@@ -1972,11 +1989,14 @@ class CustomOPTDecoder(OPTDecoder):
                     continue
 
             past_key_value = past_key_values[idx] if past_key_values is not None else None
-
-            if self.gradient_checkpointing and self.training:
+            
+            if (self.config.project_only_first_layer and idx == 0) or not self.config.project_only_first_layer:
                 k_proj_bases, v_proj_bases, q_proj_bases, out_proj_bases, fc1_bases, fc2_bases = projection_configs
                 projection_config = (k_proj_bases[idx], v_proj_bases[idx], q_proj_bases[idx], out_proj_bases[idx], fc1_bases[idx], fc2_bases[idx])
-
+            elif self.config.project_only_first_layer and idx > 0:
+                pass
+            
+            if self.gradient_checkpointing and self.training:
                 # TODO: hopefully this is torch.utils.checkpoint.checkpoint
                 layer_outputs = self._gradient_checkpointing_func(
                     decoder_layer.__call__,
@@ -1997,6 +2017,8 @@ class CustomOPTDecoder(OPTDecoder):
                     past_key_value=past_key_value,
                     output_attentions=output_attentions,
                     use_cache=use_cache,
+                    projection_config=projection_config,
+                    i_task=i_task
                 )
 
             hidden_states = layer_outputs[0]

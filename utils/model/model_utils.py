@@ -29,7 +29,7 @@ def create_hf_model(model_class,
     #print(model_config)
     if args is not None:
         print('we assign the flags and step size etc....')
-        if args.CL_method == 'SVD':
+        if args.CL_method == 'SVD' or args.CL_method == 'svd_replay':
             model_config.use_repurposed_dims = args.use_repurposed_dims
             print('foooooooooooooo')
             print(args.ffn_only)
@@ -39,6 +39,7 @@ def create_hf_model(model_class,
             model_config.qk_only = args.qk_only
             model_config.ov_only = args.ov_only
             model_config.step_size = args.step_size
+            model_config.project_only_first_layer = args.project_only_first_layer
             print(model_config)
     if disable_dropout:
         model_config.dropout = 0.0
@@ -237,6 +238,7 @@ def generate_basis_for_opt(model, repurpose_dim_size):
     repurposed_dims_list = []
     for name, param in model.model.decoder.layers.named_parameters():
         print(name, param)
+        param = param - param.mean(dim=0)
         #torch.cuda.empty_cache()
         #param = param.to('cuda')
         if 'k_proj.weight' in name:
@@ -387,3 +389,72 @@ def generate_basis_for_bloom(model, repurpose_dim_size):
             #base_directions = base_directions.to('cpu')
             dense_4h_to_h_bases.append((basis, repurposed_directions, base_directions))
     return (query_key_value_bases, dense_bases, dense_h_to_4h_bases, dense_4h_to_h_bases)
+
+
+
+
+def generate_basis_for_phi(model, repurpose_dim_size):
+    query_key_value_bases = []
+    dense_bases = []
+    fc1_bases = []
+    fc2_bases = []
+
+    repurposed_dims_list = []
+
+    for name, param in model.model.layers.named_parameters():
+        print(name, param)
+        torch.cuda.empty_cache()
+        #param = param.to('cuda')
+        if 'query_key_value.weight' in name:
+            print(name, param)
+            hidden_size = param.shape[1]
+            repurposed_dims = torch.arange(hidden_size - repurpose_dim_size, hidden_size)
+            base_dims = torch.tensor([x for x in range(hidden_size) if x not in repurposed_dims])
+            basis = get_latent_directions_module(param)
+            v = basis[:, base_dims]
+            repurposed_directions = basis[:, repurposed_dims]
+            base_directions = basis[:, base_dims]
+            #v = v.to('cuda')
+            #base_directions = v @ v.T
+            #base_directions = base_directions.to('cpu')
+            query_key_value_bases.append((basis, repurposed_directions, base_directions))
+        elif 'dense.weight' in name:
+            print(name, param)
+            hidden_size = param.shape[1]  
+            repurposed_dims = torch.arange(hidden_size - repurpose_dim_size, hidden_size)
+            base_dims = torch.tensor([x for x in range(hidden_size) if x not in repurposed_dims])
+            basis = get_latent_directions_module(param)
+            v = basis[:, base_dims]
+            repurposed_directions = basis[:, repurposed_dims]
+            base_directions = basis[:, base_dims]
+            #v = v.to('cuda')
+            #base_directions = v @ v.T
+            #base_directions = base_directions.to('cpu')
+            dense_bases.append((basis, repurposed_directions, base_directions))          
+        elif 'fc1.weight' in name:
+            print(name, param)
+            hidden_size = param.shape[1]
+            repurposed_dims = torch.arange(hidden_size - repurpose_dim_size, hidden_size)
+            base_dims = torch.tensor([x for x in range(hidden_size) if x not in repurposed_dims])
+            basis = get_latent_directions_module(param)
+            v = basis[:, base_dims]
+            repurposed_directions = basis[:, repurposed_dims]
+            base_directions = basis[:, base_dims]
+            #v = v.to('cuda')
+            #base_directions = v @ v.T
+            #base_directions = base_directions.to('cpu')
+            fc1_bases.append((basis, repurposed_directions, base_directions))
+        elif 'fc2.weight' in name:
+            print(name, param)
+            hidden_size = param.shape[1]
+            repurposed_dims = torch.arange(hidden_size - repurpose_dim_size, hidden_size)
+            base_dims = torch.tensor([x for x in range(hidden_size) if x not in repurposed_dims])
+            basis = get_latent_directions_module(param)
+            v = basis[:, base_dims]
+            repurposed_directions = basis[:, repurposed_dims]
+            base_directions = basis[:, base_dims]
+            #v = v.to('cuda')
+            #base_directions = v @ v.T
+            #base_directions = base_directions.to('cpu')
+            fc2_bases.append((basis, repurposed_directions, base_directions))
+    return (query_key_value_bases, dense_bases, fc1_bases, fc2_bases)

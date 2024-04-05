@@ -26,6 +26,8 @@ from torch.utils.data.distributed import DistributedSampler
 import torch.distributed as dist
 import deepspeed
 import json
+import pickle
+
 
 from transformers import (
     LlamaForCausalLM,
@@ -52,11 +54,25 @@ from model.Dynamic_network.PP import PP, convert_PP_model
 from model.Dynamic_network.L2P import convert_L2P_model
 
 from model.CustomLlamaForCausalLM import CustomLlamaForCausalLM
-
+from model.CustomOPTForCausalLM import CustomOPTForCausalLM
+from model.CustomBloomForCausalLM import CustomBloomForCausalLM
 
 # dist.init_process_group(backend='nccl')
 
+def str2bool(v):
+    if isinstance(v, bool):
+        return v
+    if v.lower() in ('yes', 'true', 't', 'y', '1'):
+        return True
+    elif v.lower() in ('no', 'false', 'f', 'n', '0'):
+        return False
+    else:
+        raise argparse.ArgumentTypeError('Boolean value expected.')
 
+def none_or_int(value):
+    if value == 'None':
+        return None
+    return int(value)
 def parse_args():
     def list_of_strings(arg):
         return arg.split(',')
@@ -149,7 +165,36 @@ def parse_args():
                         type=bool, 
                         default=True,
                         help='project to base or dormant subspace')
-
+    parser.add_argument('--repurpose_dim_size',
+                        type=int,
+                        default=100,
+                        help='repurpose dimension size')
+    parser.add_argument('--model',
+                        default=None,
+                        help='name of model')
+    parser.add_argument('--proj_config_path',
+                        type=str,
+                        default=None,
+                        help='path to proj config pickles')
+    parser.add_argument('--ffn_only',
+                        type=str2bool,
+                        help='Project only ffn layer. Set this flag if you want to enable it.')
+    parser.add_argument('--mha_only',
+                        type=str2bool,
+                        help='Project only mha. Set this flag if you want to enable it.')
+    parser.add_argument('--qk_only',
+                        type=str2bool,
+                        help='Project only qk circuit. Set this flag if you want to enable it.')
+    parser.add_argument('--ov_only',
+                        type=str2bool,
+                        help='Project only ov circuit. Set this flag if you want to enable it.')
+    parser.add_argument('--step_size',
+                        type=none_or_int,
+                        default=None,
+                        help='Step size of affine shift')
+    parser.add_argument('--project_only_first_layer',
+                        type=str2bool,
+                        help='Project only first transformer block. Set this flag if you want to enable it.')
     parser = deepspeed.add_config_arguments(parser)
     args = parser.parse_args()
 
@@ -162,11 +207,13 @@ def main():
     device = torch.device("cuda")
 
 
-    def prediction(model, infer_dataloader):
+    def prediction(model, infer_dataloader, inference_task_id, projection_configs):
         predicted_sequences = []
         sources_sequences = []
         ground_truths = []
         model.eval()
+        model.model.decoder.i_task = inference_task_id
+        model.model.decoder.projection_configs = projection_configs
         for step, batch in enumerate(infer_dataloader):
             # TODO, add prompts, choosen, rejected
             # implementation, batch = {k: v.to(device) for k, v in batch.items()}
@@ -227,13 +274,41 @@ def main():
         inference_model_path = os.path.join(args.inference_model_path, str(round))
         print_rank_0("Inference Model Path: " + inference_model_path, args.local_rank)
 
-        model = create_hf_model(AutoModelForCausalLM,
-                                args.model_name_or_path,
-                                tokenizer,
-                                ds_config=None,
-                                args=args,
-                                )
-        
+        if args.CL_method == 'SVD':
+            if 'opt' in args.model_name_or_path:
+                model = create_hf_model(CustomOPTForCausalLM,
+                                        args.model_name_or_path,
+                                        tokenizer,
+                                        ds_config=None,
+                                        args=args,
+                                        )
+            elif 'bloom' in args.model_name_or_path:
+                model = create_hf_model(CustomBloomForCausalLM,
+                                        args.model_name_or_path,
+                                        tokenizer,
+                                        ds_config=None,
+                                        args=args,
+                                        )
+        else:
+            model = create_hf_model(AutoModelForCausalLM,
+                                    args.model_name_or_path,
+                                    tokenizer,
+                                    ds_config=None,
+                                    args=args,
+                                    )
+
+        projection_configs = None
+        PROJ_CONFIG_PATH = args.proj_config_path + args.model + '_' + str(args.repurpose_dim_size) + '_proj_config.pkl'
+        with open(PROJ_CONFIG_PATH, 'rb') as f:
+            projection_configs = pickle.load(f)
+            print("projection configs has been loaded from disk.")
+
+        print(device)
+        # Assuming projection_configs is a tuple of lists of tensors
+        if args.CL_method == 'SVD':
+            projection_configs = tuple(
+                [(a.to(device).to(torch.float32), b.to(device).to(torch.float32), c.to(device).to(torch.float32)) for a,b,c in config_list] for config_list in projection_configs
+            )
         # TODO: add adapters
         if args.CL_method == "LFPT5":
             from peft import PeftModel
@@ -325,7 +400,7 @@ def main():
 
             # Inference !
             print_rank_0("***** Start inference *****", args.local_rank)
-            sources_sequences, predicted_sequences, ground_truths = prediction(model, infer_dataloader)
+            sources_sequences, predicted_sequences, ground_truths = prediction(model, infer_dataloader, inference_task_id, projection_configs)
             # Get Accuracy/ROUGE/BLEU/...
             # The evaluation result is stored in a dictionary. e.g. {"accuracy": .., "rouge-L": ..}
             try:

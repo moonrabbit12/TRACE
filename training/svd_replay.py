@@ -6,16 +6,18 @@
 import sys
 sys.dont_write_bytecode = True
 
-import pickle
-
+import pickle 
 import argparse
 import os
 import math
 import sys
 from tqdm import tqdm
+import random
+
+import numpy as np 
 
 import torch
-from torch.utils.data import DataLoader, RandomSampler, SequentialSampler
+from torch.utils.data import DataLoader, RandomSampler, SequentialSampler, ConcatDataset, Sampler
 from torch.utils.data.distributed import DistributedSampler
 
 from transformers import (
@@ -40,7 +42,7 @@ from utils.data.data_collator import DataCollator
 from utils.utils import print_rank_0, to_device, save_hf_format, set_random_seed, get_all_reduce_mean, get_optimizer_grouped_parameters, save_zero_three_model, load_hf_tokenizer
 from utils.ds_utils import get_train_ds_config
 from utils.module.lora import convert_linear_layer_to_lora, convert_lora_to_linear_layer, only_optimize_lora_parameters
-from utils.model.model_utils import create_hf_model, get_latent_directions, generate_basis_pipeline, generate_basis_for_opt, generate_basis_for_bloom, generate_basis_for_phi
+from utils.model.model_utils import create_hf_model
 
 # add flash attention
 from utils.flash_attention.llama_flash_att import replace_llama_attn_with_flash_attn
@@ -60,9 +62,31 @@ from params import Method2Class, AllDatasetName
 from model.CustomLlamaForCausalLM import CustomLlamaForCausalLM
 from model.CustomOPTForCausalLM import CustomOPTForCausalLM
 from model.CustomBloomForCausalLM import CustomBloomForCausalLM
-from model.CustomPhiForCausalLM import CustomPhiForCausalLM
 
-# TODO, check support for OPT and llama
+class TaskAwareSampler(Sampler):
+    def __init__(self, concat_dataset):
+        self.concat_dataset = concat_dataset
+        self.dataset_lengths = [len(d) for d in concat_dataset.datasets]
+        self.dataset_offsets = np.cumsum(self.dataset_lengths)[:-1]
+        self.last_i_task = None  # Add this line to remember the last i_task
+
+    def __iter__(self):
+        self.last_i_task = np.random.randint(len(self.concat_dataset.datasets))
+        start_idx = 0 if self.last_i_task == 0 else self.dataset_offsets[self.last_i_task - 1]
+        
+        # Adjust end_idx calculation
+        if self.last_i_task < len(self.dataset_lengths) - 1:
+            end_idx = self.dataset_offsets[self.last_i_task]
+        else:
+            # For the last dataset, end_idx is the sum of all dataset_lengths
+            end_idx = sum(self.dataset_lengths)
+
+        indices = torch.randperm(end_idx - start_idx) + start_idx
+        return iter(indices.tolist())
+
+    def __len__(self):
+        # Return the total length of the dataset
+        return sum(self.dataset_lengths)
 
 def str2bool(v):
     if isinstance(v, bool):
@@ -79,6 +103,9 @@ def none_or_int(value):
         return None
     return int(value)
 
+# TODO, check support for OPT and llama
+
+
 def parse_args():
     def list_of_strings(arg):
         return arg.split(',')
@@ -93,6 +120,11 @@ def parse_args():
                         type=list_of_strings,
                         default='all',
                         help='Dataset to be used.')
+    
+    parser.add_argument('--replay_dataset_name',
+                    type=str,
+                    default='Lima',
+                    help='Dataset to be used.')
     parser.add_argument(
         '--data_output_path',
         type=str,
@@ -211,6 +243,11 @@ def parse_args():
     parser.add_argument('--print_loss',
                         action='store_true',
                         help='Prints loss at each step.')
+    # added by wangxiao
+    parser.add_argument('--past_task_ratio',
+                default=None,
+                help='Replay ratio used for past task')
+
     parser.add_argument('--proj_config_path',
                         type=str,
                         default=None,
@@ -248,25 +285,20 @@ def parse_args():
     parser.add_argument('--project_only_first_layer',
                         type=str2bool,
                         help='Project only first transformer block. Set this flag if you want to enable it.')
-    print('here is parser')
-    print(parser)
+
     parser = deepspeed.add_config_arguments(parser)
     args = parser.parse_args()
-    print('here is args in the parse args')
-    print(args)
+
 
     return args
 
 
 def main():
     args = parse_args()
-    print('hre is the stuffffffffffffff')
-    print(args)
+
     if args.local_rank == -1:
-        print(args.local_rank)
         device = torch.device("cuda")
     else:
-        print(args.local_rank)
         torch.cuda.set_device(args.local_rank)
         device = torch.device("cuda", args.local_rank)
         # Initializes the distributed backend which will take care of sychronizing nodes/GPUs
@@ -296,8 +328,9 @@ def main():
     # default the LLM is decoder only model, so padding side is left
     assert tokenizer.padding_side == 'left'
     assert tokenizer.truncation_side == "left"
-    if args.CL_method == 'SVD':
-        if 'vicuna' in args.model_name_or_path:
+
+
+    if 'vicuna' in args.model_name_or_path:
             model = create_hf_model(CustomLlamaForCausalLM,
                                     args.model_name_or_path,
                                     tokenizer,
@@ -305,148 +338,93 @@ def main():
                                     disable_dropout=args.disable_dropout,
                                     args=args
                                     )
-
-        elif 'opt' in args.model_name_or_path:
-            # TODO: fix this logic so that repetitive code is tightened up for SVD
-            model = create_hf_model(CustomOPTForCausalLM,
-                                    args.model_name_or_path,
-                                    tokenizer,
-                                    ds_config=ds_config,
-                                    disable_dropout=args.disable_dropout,
-                                    args=args
-                                    )
-        elif 'bloom' in args.model_name_or_path:
-            model = create_hf_model(CustomBloomForCausalLM,
-                                    args.model_name_or_path,
-                                    tokenizer,
-                                    ds_config=ds_config,
-                                    disable_dropout=args.disable_dropout,
-                                    args=args
-                                    )
-        elif 'phi' in args.model_name_or_path:
-            model = create_hf_model(CustomPhiForCausalLM,
-                                    args.model_name_or_path,
-                                    tokenizer,
-                                    ds_config=ds_config,
-                                    disable_dropout=args.disable_dropout,
-                                    args=args
-                                    )
-        repurposed_dims_size = args.repurpose_dim_size
-        projection_configs = None
-        PROJ_CONFIG_PATH = args.proj_config_path + args.model + '_' + str(args.repurpose_dim_size) + '_pca' + '_proj_config.pkl'
-        if not os.path.exists(PROJ_CONFIG_PATH):
-            if 'vicuna' in args.model_name_or_path:
-                projection_config = generate_basis_pipeline(model, repurposed_dims_size)
-            elif 'opt' in args.model_name_or_path:
-                projection_configs = generate_basis_for_opt(model, repurposed_dims_size)
-            elif 'bloom' in args.model_name_or_path:
-                projection_configs = generate_basis_for_bloom(model, repurposed_dims_size)
-            elif 'phi' in args.model_name_or_path:
-                projection_configs = generate_basis_for_phi(model, repurposed_dims_size)
-            with open(PROJ_CONFIG_PATH, 'wb') as f:
-                pickle.dump(projection_configs, f)
-            print("projection configs has been pickled and saved to disk.")
-        else:
-            with open(PROJ_CONFIG_PATH, 'rb') as f:
-                projection_configs = pickle.load(f)
-            print("projection configs has been loaded from disk.")
+    elif 'opt' in args.model_name_or_path:
+        model = create_hf_model(CustomOPTForCausalLM,
+                                args.model_name_or_path,
+                                tokenizer,
+                                ds_config=ds_config,
+                                disable_dropout=args.disable_dropout,
+                                args=args
+                                )
+    elif 'bloom' in args.model_name_or_path:
+        model = create_hf_model(CustomBloomForCausalLM,
+                                args.model_name_or_path,
+                                tokenizer,
+                                ds_config=ds_config,
+                                disable_dropout=args.disable_dropout,
+                                args=args
+                                )
     else:
+        model = create_hf_model(AutoModelForCausalLM,
+                                args.model_name_or_path,
+                                tokenizer,
+                                ds_config=ds_config,
+                                disable_dropout=args.disable_dropout
+                                )
+
+    repurposed_dims_size = args.repurpose_dim_size
+    projection_configs = None
+    PROJ_CONFIG_PATH = args.proj_config_path + args.model + '_' + str(args.repurpose_dim_size) + '_pca' + '_proj_config.pkl'
+    if not os.path.exists(PROJ_CONFIG_PATH):
         if 'vicuna' in args.model_name_or_path:
-            model = create_hf_model(LlamaForCausalLM,
-                                    args.model_name_or_path,
-                                    tokenizer,
-                                    ds_config=ds_config,
-                                    disable_dropout=args.disable_dropout,
-                                    args=args
-                                    )
-        else:
-            model = create_hf_model(AutoModelForCausalLM,
-                                    args.model_name_or_path,
-                                    tokenizer,
-                                    ds_config=ds_config,
-                                    disable_dropout=args.disable_dropout,
-                                    args=args
-                                    )
-    # some CL methods can be realized by peft
-    if args.CL_method == "LFPT5":
-        from utils.my_peft import get_peft_model, PromptTuningInit, PromptTuningConfig, LoraConfig, TaskType
+            projection_config = generate_basis_pipeline(model, repurposed_dims_size)
+        elif 'opt' in args.model_name_or_path:
+            projection_configs = generate_basis_for_opt(model, repurposed_dims_size)
+        elif 'bloom' in args.model_name_or_path:
+            projection_configs = generate_basis_for_bloom(model, repurposed_dims_size)
+        elif 'phi' in args.model_name_or_path:
+            projection_configs = generate_basis_for_phi(model, repurposed_dims_size)
+        with open(PROJ_CONFIG_PATH, 'wb') as f:
+            pickle.dump(projection_configs, f)
+        print("projection configs has been pickled and saved to disk.")
+    else:
+        with open(PROJ_CONFIG_PATH, 'rb') as f:
+            projection_configs = pickle.load(f)
+        print("projection configs has been loaded from disk.")
 
-        initial_prompt = getInitialPrompt(tokenizer, prompt_token_number=300)
-        peft_config = PromptTuningConfig(
-            task_type=TaskType.CAUSAL_LM,
-            prompt_tuning_init=PromptTuningInit.TEXT,
-            num_virtual_tokens=300,
-            prompt_tuning_init_text=initial_prompt,
-            tokenizer_name_or_path=args.model_name_or_path,
-        )
-        model = get_peft_model(model, peft_config)
+    projection_configs = tuple(
+        [(a.to(device), b.to(device), c.to(device)) for a,b,c in config_list] for config_list in projection_configs
+    )
 
-    if args.CL_method == "O-LoRA":
-        from utils.my_peft import get_peft_model, PromptTuningInit, PromptTuningConfig, LoraConfig, TaskType
-
-        peft_config = LoraConfig(
-            task_type=TaskType.CAUSAL_LM, r=8, lora_alpha=32, lora_dropout=0.1
-        )
-        model = get_peft_model(model, peft_config)
-        for name, param in model.named_parameters():
-            if name.find("loranew_") != -1:
-                param.requires_grad = True
-            elif name.find("lora_") != -1:
-                param.requires_grad = False
-                
-    if args.CL_method == "OGD":
-        from peft import get_peft_model, LoraConfig, TaskType
-        
-        peft_config = LoraConfig(
-            task_type=TaskType.CAUSAL_LM, r=8, lora_alpha=32, lora_dropout=0.1
-        )
-        model = get_peft_model(model, peft_config)
-        for name, param in model.named_parameters():
-            if name.find("lora") != -1:
-                param.requires_grad = True
-
-    if args.CL_method == "lora":
-        from peft import get_peft_model, LoraConfig, TaskType
-        
-        peft_config = LoraConfig(
-            task_type=TaskType.CAUSAL_LM, r=8, lora_alpha=32, lora_dropout=0.1
-        )
-        model = get_peft_model(model, peft_config)
-        for name, param in model.named_parameters():
-            if name.find("lora") != -1:
-                param.requires_grad = True
-    
     train_task_list = {}
     eval_task_list = {}
     test_task_list = {}
+    
+    replay_dataset_list={}
 
-
-    if args.dataset_name[0] == "all":
-        Datasets = AllDatasetName
-    else:
-        Datasets = args.dataset_name
-    for dataset in Datasets:
+    def get_dataset(dataset):
         dataset_path = os.path.join(args.data_path,dataset)
         # Prepare the data
+        if dataset==args.replay_dataset_name:
+            sample_ratio=None
+        else:
+            sample_ratio=eval(args.past_task_ratio)
+        replay_dataset, _, _ = create_prompt_dataset(
+            args.local_rank,
+            dataset_path,
+            args.data_output_path,
+            args.seed,
+            sample_ratio=sample_ratio
+        )
         train_dataset, eval_dataset, test_dataset = create_prompt_dataset(
             args.local_rank,
             dataset_path,
             args.data_output_path,
-            args.seed
+            args.seed,
         )
-
+        
         # DataLoaders creation:
         if args.local_rank == -1:
             train_sampler = RandomSampler(train_dataset)
             eval_sampler = SequentialSampler(eval_dataset)
             test_sampler = SequentialSampler(test_dataset)
-
         else:
             train_sampler = DistributedSampler(train_dataset)
             eval_sampler = DistributedSampler(eval_dataset)
             test_sampler = DistributedSampler(test_dataset)
 
-        data_collator = DataCollator(
+
+        data_collator  = DataCollator(
             tokenizer,
             padding="longest",
             max_prompt_len=args.max_prompt_len,
@@ -469,6 +447,7 @@ def main():
                                     collate_fn=data_collator,
                                     sampler=train_sampler,
                                     batch_size=args.per_device_train_batch_size)
+
         eval_dataloader = DataLoader(eval_dataset,
                                     collate_fn=data_collator,
                                     sampler=eval_sampler,
@@ -477,34 +456,22 @@ def main():
                             collate_fn=inf_data_collator,
                             sampler=test_sampler,
                             batch_size=args.per_device_eval_batch_size)
+        return train_dataloader, replay_dataset, eval_dataloader, test_dataloader
+    
+    replay_dataloader,replay_dataset,_,_ = get_dataset(args.replay_dataset_name)
+    replay_dataset_list[args.replay_dataset_name] = replay_dataset
+
+    if args.dataset_name[0] == "all":
+        Datasets = AllDatasetName
+    else:
+        Datasets = args.dataset_name
+    for dataset in Datasets:
+        train_dataloader, replay_dataset, eval_dataloader, test_dataloader = get_dataset(dataset)
+ 
         train_task_list[dataset] = train_dataloader
         eval_task_list[dataset] = eval_dataloader
         test_task_list[dataset] = test_dataloader
-
-
-    def evaluation(model, eval_dataloader):
-        model.eval()
-        losses = 0
-        for step, batch in enumerate(eval_dataloader):
-            # implementation, batch = {k: v.to(device) for k, v in batch.items()}
-            del batch['sources']
-            batch = to_device(batch, device)
-            with torch.no_grad():
-                # TODO, check output
-                outputs = model(**batch)
-
-            loss = outputs.loss
-            losses += loss.float()
-        losses = losses / (step + 1)
-        try:
-            perplexity = torch.exp(losses)
-        except OverflowError:
-            perplexity = float("inf")
-        try:
-            perplexity = get_all_reduce_mean(perplexity).item()
-        except:
-            pass
-        return perplexity
+        replay_dataset_list[dataset] = replay_dataset
 
     def get_optimizer(model):
         # Split weights in two groups, one with weight decay and the other not.
@@ -525,46 +492,7 @@ def main():
         )
         
         return optimizer, lr_scheduler
-    
-    if args.CL_method=="PP" or args.CL_method=="L2P":
-        if "opt" in args.model_name_or_path.lower():
-            embed_tokens_shape = model.model.decoder.embed_tokens.weight.shape
-            embed_tokens = model.model.decoder.embed_tokens
-            
-            args.embed_tokens_dim = embed_tokens_shape[1]
-            args.embed_tokens_length = embed_tokens_shape[0]
-            args.embed_tokens = embed_tokens
-        elif "llama" in args.model_name_or_path.lower():
-            embed_tokens_shape = model.model.embed_tokens.weight.shape
-            embed_tokens = model.model.embed_tokens
-            
-            args.embed_tokens_dim = embed_tokens_shape[1]
-            args.embed_tokens_length = embed_tokens_shape[0]
-            args.embed_tokens = embed_tokens
-            
-        if args.CL_method=="PP":
-            args.prefix_len = 20
-            args.task_length = len(train_task_list)
-            model = convert_PP_model(model, args)
-            
-        elif args.CL_method=="L2P":
-            args.pool_size = 10
-            args.prompt_length = 5
-            args.prompt_init = "uniform"
-            model = convert_L2P_model(model, args)
-            for name, params in model.named_parameters():
-                if "prompt" not in name:
-                    params.requires_grad=False
-
-
-    #if 'vicuna' in args.model_name_or_path and args.CL_method == 'SVD':
-    #    repurposed_dims_size = 100
-    #    projection_configs = generate_basis_pipeline(model, repurposed_dims_size)
-    #    print(projection_configs)
-
-    if args.gradient_checkpointing:
-        model.gradient_checkpointing_enable()
-
+                    
     optimizer, lr_scheduler = get_optimizer(model)
     model, optimizer, _, lr_scheduler = deepspeed.initialize(
         model=model,
@@ -572,11 +500,10 @@ def main():
         args=args,
         config=ds_config,
         lr_scheduler=lr_scheduler,
-        dist_init_required=True,
-        model_parameters=model.parameters())
+        dist_init_required=True)
 
-
-
+    if args.gradient_checkpointing:
+        model.gradient_checkpointing_enable()
 
     # Train!
     print_rank_0("***** Running training *****", args.global_rank)
@@ -586,23 +513,111 @@ def main():
     # perplexity = evaluation(model, eval_dataloader)
     # print_rank_0(f"ppl: {perplexity}", args.global_rank)
 
-    device = model.device  # Get the device from DeepSpeed model engine
-    print(device)
-    # Assuming projection_configs is a tuple of lists of tensors
-    if args.CL_method == 'SVD':
-        projection_configs = tuple(
-            [(a.to(device), b.to(device), c.to(device)) for a,b,c in config_list] for config_list in projection_configs
+    # Initialize the global progress bar
+    def train_one_task(task, i_task, epochs, projection_configs):
+        
+        #### TRAIN ####
+        train_dataloader = train_task_list[task]
+        eval_dataloader = eval_task_list[task]
+        total_steps = epochs * len(train_dataloader)
+        progress_bar = tqdm(total=total_steps, leave=True, disable=(args.global_rank != 0))
+        for epoch in range(epochs):
+            print_rank_0(
+                f"Beginning of Epoch {epoch+1}/{epochs}, Total Micro Batches {len(train_dataloader)}",
+                args.global_rank)
+            model.train()
+
+            for step, batch in enumerate(train_dataloader):
+                del batch['sources']
+                batch = to_device(batch, device)
+                outputs = model(**batch, projection_configs=projection_configs, use_cache=False, i_task=i_task)
+                loss = outputs.loss
+                # Update the description to include current step and loss, if needed
+                if args.global_rank == 0:
+                    # Update the progress bar
+                    progress_bar.update(1)
+                    description = f"Epoch {epoch+1}, Step {step}, Loss: {loss.item():.4f}"
+                    progress_bar.set_description(description, refresh=False)
+
+                model.backward(loss)
+                # Correct gradient accumulation steps are handled withing the deepspeed engine's backward call.
+                model.step()
+
+    def replay(i_task, epochs):
+        replay_datasets = [replay_dataset_list[Datasets[i]] for i in range(i_task)]
+        replay_datasets.append(replay_dataset_list[args.replay_dataset_name])
+        replay_datasets = ConcatDataset(replay_datasets)
+        #replay_sampler = RandomSampler(replay_datasets)
+        replay_sampler = TaskAwareSampler(replay_datasets)
+        
+        data_collator  = DataCollator(
+            tokenizer,
+            padding="longest",
+            max_prompt_len=args.max_prompt_len,
+            max_ans_len=args.max_ans_len,
+            pad_to_multiple_of=8,
+            inference=False
         )
+        replay_dataloader = DataLoader(replay_datasets,
+                                    collate_fn=data_collator,
+                                    sampler=replay_sampler,
+                                    batch_size=args.per_device_train_batch_size)
+        if args.local_rank == -1:
+            device = torch.device("cuda")
+        else:
+            torch.cuda.set_device(args.local_rank)
+            device = torch.device("cuda", args.local_rank)
+        
+        #### TRAIN ####
+        print("Replaying....................................")
 
-    # Now projection_configs_updated contains tensors that are all on the same device as the model
+        total_steps = epochs * len(replay_dataloader)
+        progress_bar = tqdm(total=total_steps, leave=True, disable=(args.global_rank != 0))
+        for epoch in range(epochs):
+            print_rank_0(
+                f"Beginning of Epoch {epoch+1}/{epochs}, Total Micro Batches {len(train_dataloader)}",
+                args.global_rank)
+            model.train()
 
-    #projection_configs = None
-    if args.CL_method in Method2Class.keys() and args.CL_method == 'SVD' :
-        CL_Trainer = Method2Class[args.CL_method](model, tokenizer, optimizer, train_task_list, eval_task_list, test_task_list, args)
-        CL_Trainer.train_continual_projection(projection_configs)
-    else:
-        CL_Trainer = Method2Class[args.CL_method](model, tokenizer, optimizer, train_task_list, eval_task_list, test_task_list, args)
-        CL_Trainer.train_continual()
+            for step, batch in enumerate(replay_dataloader):
+                i_task = replay_dataloader.sampler.last_i_task
+                del batch['sources']
+                batch = to_device(batch, device)
+                outputs = model(**batch, projection_configs=projection_configs, use_cache=False, i_task=i_task)
+                loss = outputs.loss
+                # Update the description to include current step and loss, if needed
+                if args.global_rank == 0:
+                    # Update the progress bar
+                    progress_bar.update(1)
+                    description = f"Epoch {epoch+1}, Step {step}, Loss: {loss.item():.4f}"
+                    progress_bar.set_description(description, refresh=False)
+
+                model.backward(loss)
+                # Correct gradient accumulation steps are handled withing the deepspeed engine's backward call.
+                model.step()
+                
+    def save_model(round):
+        if args.output_dir is not None:
+            print_rank_0('saving model ...', args.global_rank)
+
+        if args.global_rank == 0:
+            save_hf_format(model, tokenizer, args, sub_folder=str(round))
+
+        if args.zero_stage == 3:
+            # For zero stage 3, each gpu only has a part of the model, so we need a special save function
+            save_zero_three_model(model,
+                                  args.global_rank,
+                                  args.output_dir,
+                                  zero_stage=args.zero_stage)
+        print_rank_0('Sucessful saving model after round {}'.format(round), args.global_rank)
+
+
+    for i_task, task in enumerate(train_task_list):
+        train_one_task(task, i_task, int(args.num_train_epochs[i_task]), projection_configs)
+        replay(i_task, 1)
+        save_model(i_task)
+        # CL_Trainer.save_model()
+        
 
 
 if __name__ == "__main__":
