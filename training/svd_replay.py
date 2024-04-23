@@ -63,30 +63,44 @@ from model.CustomLlamaForCausalLM import CustomLlamaForCausalLM
 from model.CustomOPTForCausalLM import CustomOPTForCausalLM
 from model.CustomBloomForCausalLM import CustomBloomForCausalLM
 
-class TaskAwareSampler(Sampler):
-    def __init__(self, concat_dataset):
+class ShuffledHomogeneousBatchSampler(Sampler):
+    def __init__(self, concat_dataset, batch_size):
         self.concat_dataset = concat_dataset
-        self.dataset_lengths = [len(d) for d in concat_dataset.datasets]
-        self.dataset_offsets = np.cumsum(self.dataset_lengths)[:-1]
-        self.last_i_task = None  # Add this line to remember the last i_task
+        self.batch_size = batch_size
+        
+        # Calculate the start index of each dataset in the concatenated dataset
+        self.dataset_offsets = [0] + torch.cumsum(torch.tensor([len(d) for d in concat_dataset.datasets]), 0).tolist()[:-1]
+        self.i_tasks = []
 
     def __iter__(self):
-        self.last_i_task = np.random.randint(len(self.concat_dataset.datasets))
-        start_idx = 0 if self.last_i_task == 0 else self.dataset_offsets[self.last_i_task - 1]
-        
-        # Adjust end_idx calculation
-        if self.last_i_task < len(self.dataset_lengths) - 1:
-            end_idx = self.dataset_offsets[self.last_i_task]
-        else:
-            # For the last dataset, end_idx is the sum of all dataset_lengths
-            end_idx = sum(self.dataset_lengths)
+        all_batches = []
+        for dataset_idx, dataset in enumerate(self.concat_dataset.datasets):
+            dataset_start = self.dataset_offsets[dataset_idx]
+            indices = torch.randperm(len(dataset)) + dataset_start
+            # Create batches for the current dataset
+            for i in range(0, len(indices), self.batch_size):
+                all_batches.append(indices[i:i+self.batch_size].tolist())
+                self.i_tasks.append(dataset_idx)
 
-        indices = torch.randperm(end_idx - start_idx) + start_idx
-        return iter(indices.tolist())
+        # Shuffle the list of all batches to randomize the order of datasets in each epoch
+        all_batches, self.i_tasks = unison_shuffled_copies(all_batches, self.i_tasks)
+        #np.random.shuffle(all_batches)
+
+        # Yield batches one by one
+        for batch in all_batches:
+            yield from batch
 
     def __len__(self):
-        # Return the total length of the dataset
-        return sum(self.dataset_lengths)
+        # This will give the total number of batches across all datasets
+        total_samples = sum(len(d) for d in self.concat_dataset.datasets)
+        return (total_samples + self.batch_size - 1) // self.batch_size
+
+def unison_shuffled_copies(a, b):
+    assert len(a) == len(b)
+    c = list(zip(a, b))
+    random.shuffle(c)
+    a, b = zip(*c)
+    return a, b
 
 def str2bool(v):
     if isinstance(v, bool):
@@ -548,7 +562,7 @@ def main():
         replay_datasets.append(replay_dataset_list[args.replay_dataset_name])
         replay_datasets = ConcatDataset(replay_datasets)
         #replay_sampler = RandomSampler(replay_datasets)
-        replay_sampler = TaskAwareSampler(replay_datasets)
+        replay_sampler = ShuffledHomogeneousBatchSampler(replay_datasets, args.per_device_train_batch_size)
         
         data_collator  = DataCollator(
             tokenizer,
@@ -571,7 +585,7 @@ def main():
         #### TRAIN ####
         print("Replaying....................................")
 
-        total_steps = epochs * len(replay_dataloader)
+        total_steps = epochs * len(replay_dataloader) * args.per_device_train_batch_size
         progress_bar = tqdm(total=total_steps, leave=True, disable=(args.global_rank != 0))
         for epoch in range(epochs):
             print_rank_0(
@@ -580,7 +594,7 @@ def main():
             model.train()
 
             for step, batch in enumerate(replay_dataloader):
-                i_task = replay_dataloader.sampler.last_i_task
+                i_task = replay_dataloader.sampler.i_tasks[step]
                 del batch['sources']
                 batch = to_device(batch, device)
                 outputs = model(**batch, projection_configs=projection_configs, use_cache=False, i_task=i_task)

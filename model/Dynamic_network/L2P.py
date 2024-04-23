@@ -143,7 +143,8 @@ class L2P(CL_Base_Model):
 
         dataloader_train = self.train_task_list[task]
         self.train_length = len(dataloader_train)
-        total_steps = self.args.num_train_epochs * len(dataloader_train)
+        #total_steps = self.args.num_train_epochs * len(dataloader_train)
+        total_steps = epochs * len(dataloader_train)
         progress_bar = tqdm(total=total_steps, leave=True, disable=(self.args.global_rank != 0))
 
 

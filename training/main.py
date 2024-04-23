@@ -545,11 +545,14 @@ def main():
         if args.CL_method=="PP":
             args.prefix_len = 20
             args.task_length = len(train_task_list)
+            args.task_idx = {string : idx for idx, string in enumerate(train_task_list)}
             model = convert_PP_model(model, args)
             
         elif args.CL_method=="L2P":
-            args.pool_size = 10
-            args.prompt_length = 5
+            #args.pool_size = 10
+            #args.prompt_length = 5
+            args.pool_size = 40
+            args.prompt_length = 20
             args.prompt_init = "uniform"
             model = convert_L2P_model(model, args)
             for name, params in model.named_parameters():

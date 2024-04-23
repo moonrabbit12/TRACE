@@ -299,13 +299,14 @@ class PP(CL_Base_Model):
         # model.model.to(self.device)
 
         dataloader_train = self.train_task_list[task]
-        total_steps = self.args.num_train_epochs * len(dataloader_train)
+        #total_steps = self.args.num_train_epochs * len(dataloader_train)
+        total_steps = epochs * len(dataloader_train)
+
         progress_bar = tqdm(total=total_steps, leave=True, disable=(self.args.global_rank != 0))
 
         val_acc = []
 
         for epoch in range(epochs):
-            print(epoch)
             model.train()
             if self.prefix_MLP!=None:
                 mlp.train()
@@ -345,7 +346,9 @@ class PP(CL_Base_Model):
             #     prompt = torch.concat([prompt, self.previous_prompts], axis=0)
 
         if progressive:
-            self.progress_previous_prompts(task=task)
+            # originally passed a string only... caused bug
+            # fixed by including a string to index hash map
+            self.progress_previous_prompts(task_num=self.args.task_idx[task])
             # model.model.prompt.data = deepcopy(old_prompt.data)
 
 def convert_PP_model(model, args):
