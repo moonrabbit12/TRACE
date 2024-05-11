@@ -42,7 +42,7 @@ from utils.data.data_collator import DataCollator
 from utils.utils import print_rank_0, to_device, save_hf_format, set_random_seed, get_all_reduce_mean, get_optimizer_grouped_parameters, save_zero_three_model, load_hf_tokenizer
 from utils.ds_utils import get_train_ds_config
 from utils.module.lora import convert_linear_layer_to_lora, convert_lora_to_linear_layer, only_optimize_lora_parameters
-from utils.model.model_utils import create_hf_model
+from utils.model.model_utils import create_hf_model, generate_basis_for_bloom, generate_basis_for_opt
 
 # add flash attention
 from utils.flash_attention.llama_flash_att import replace_llama_attn_with_flash_attn

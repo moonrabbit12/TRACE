@@ -212,8 +212,15 @@ def main():
         sources_sequences = []
         ground_truths = []
         model.eval()
-        model.model.decoder.i_task = inference_task_id
-        model.model.decoder.projection_configs = projection_configs
+
+        if 'opt' in args.model_name_or_path:
+            model.model.decoder.i_task = inference_task_id
+            model.model.decoder.projection_configs = projection_configs
+        if 'bloom' in args.model_name_or_path:
+            print('setting idx and configs')
+            model.transformer.i_task = inference_task_id
+            model.transformer.projection_configs = projection_configs
+            
         for step, batch in enumerate(infer_dataloader):
             # TODO, add prompts, choosen, rejected
             # implementation, batch = {k: v.to(device) for k, v in batch.items()}
@@ -247,6 +254,13 @@ def main():
             sequences = tokenizer.batch_decode(generate_ids[:, prompt_len:], skip_special_tokens=True,
                                                clean_up_tokenization_spaces=False)
             predicted_sequences += sequences
+
+        if 'opt' in args.model_name_or_path:
+            model.model.decoder.i_task = None
+            model.model.decoder.projection_configs = None
+        if 'bloom' in args.model_name_or_path:
+            model.transformer.i_task = None
+            model.transformer.projection_configs = None
         return sources_sequences, predicted_sequences, ground_truths
 
     def save_inference_results(evaluation_result: dict, sources_sequences: list, predicted_sequences: list,
@@ -298,14 +312,17 @@ def main():
                                     )
 
         projection_configs = None
-        PROJ_CONFIG_PATH = args.proj_config_path + args.model + '_' + str(args.repurpose_dim_size) + '_proj_config.pkl'
+        PROJ_CONFIG_PATH = args.proj_config_path + args.model + '_' + str(args.repurpose_dim_size) + '_pca' + '_proj_config.pkl'
         with open(PROJ_CONFIG_PATH, 'rb') as f:
             projection_configs = pickle.load(f)
             print("projection configs has been loaded from disk.")
+            print(PROJ_CONFIG_PATH)
+
 
         print(device)
         # Assuming projection_configs is a tuple of lists of tensors
         if args.CL_method == 'SVD':
+            print('sent projection configs to devices...')
             projection_configs = tuple(
                 [(a.to(device).to(torch.float32), b.to(device).to(torch.float32), c.to(device).to(torch.float32)) for a,b,c in config_list] for config_list in projection_configs
             )

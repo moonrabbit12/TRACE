@@ -38,7 +38,7 @@ from transformers.modeling_utils import PreTrainedModel
 from transformers.utils import logging
 from transformers.models.bloom import BloomConfig
 
-from utils.model.model_utils import get_latent_directions_module, project_to_subspaces, projection_pipeline
+from utils.model.model_utils import get_latent_directions_module, project_to_subspaces, projection_pipeline, project_to_subspaces_bloom_qkv
 
 
 
@@ -942,12 +942,12 @@ class CustomBloomMLP(BloomMLP):
 
     def forward(self, hidden_states: torch.Tensor, residual: torch.Tensor, projection_config: Optional[Tuple] = None, i_task: Optional[int] = None) -> torch.Tensor:
         _, _, dense_h_to_4h_base, dense_4h_to_h_base = projection_config
-        if self.training and not self.config.mha_only and not self.config.qk_only and not self.config.ov_only:
+        if not self.config.mha_only and not self.config.qk_only and not self.config.ov_only:
             hidden_states = project_to_subspaces(hidden_states, *dense_h_to_4h_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
         hidden_states = self.gelu_impl(self.dense_h_to_4h(hidden_states))
 
         if self.pretraining_tp > 1 and self.slow_but_exact:
-            if self.training and not self.config.mha_only and not self.config.qk_only and not self.config.ov_only:
+            if not self.config.mha_only and not self.config.qk_only and not self.config.ov_only:
                 hidden_states = project_to_subspaces(hidden_states, *dense_4h_to_h_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
             intermediate_output = torch.zeros_like(residual)
             slices = self.dense_4h_to_h.weight.shape[-1] / self.pretraining_tp
@@ -957,7 +957,7 @@ class CustomBloomMLP(BloomMLP):
                     self.dense_4h_to_h.weight[:, int(i * slices) : int((i + 1) * slices)],
                 )
         else:
-            if self.training and not self.config.mha_only and not self.config.qk_only and not self.config.ov_only:
+            if not self.config.mha_only and not self.config.qk_only and not self.config.ov_only:
                 hidden_states = project_to_subspaces(hidden_states, *dense_4h_to_h_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
             intermediate_output = self.dense_4h_to_h(hidden_states)
 
@@ -1051,10 +1051,28 @@ class CustomBloomAttention(BloomAttention):
         i_task: Optional[int] = None,
     ):
         query_key_value_base, dense_base, _, _ = projection_config
-        if self.training and not self.config.ffn_only:
-            hidden_states = project_to_subspaces(hidden_states, *query_key_value_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
+        if not self.config.ffn_only and not self.config.ov_only and not self.config.qk_only:
+            q_hidden_states, k_hidden_states, v_hidden_states = project_to_subspaces_bloom_qkv(hidden_states, *query_key_value_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
+            q_hidden_states = F.linear(q_hidden_states, self.query_key_value.weight[:self.hidden_size, :])
+            k_hidden_states = F.linear(k_hidden_states, self.query_key_value.weight[self.hidden_size:2*self.hidden_size, :])
+            v_hidden_states = F.linear(v_hidden_states, self.query_key_value.weight[2*self.hidden_size:3*self.hidden_size, :])
+            fused_qkv = torch.cat((q_hidden_states, k_hidden_states, v_hidden_states), -1)
+        if not self.config.ffn_only and not self.config.mha_only and not self.config.qk_only:
+            _, _, v_hidden_states = project_to_subspaces_bloom_qkv(hidden_states, *query_key_value_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
+            v_hidden_states = F.linear(v_hidden_states, self.query_key_value.weight[2*self.hidden_size:3*self.hidden_size, :])
+            fused_qkv = self.query_key_value(hidden_states) 
+            fused_qkv = fused_qkv[:,:,:2*self.hidden_size]
+            fused_qkv = torch.cat((fused_qkv, v_hidden_states), -1)
+        if not self.config.ffn_only and not self.config.mha_only and not self.config.ov_only:
+            q_hidden_states, k_hidden_states, v_hidden_states = project_to_subspaces_bloom_qkv(hidden_states, *query_key_value_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
+            q_hidden_states = F.linear(q_hidden_states, self.query_key_value.weight[:self.hidden_size, :])
+            k_hidden_states = F.linear(k_hidden_states, self.query_key_value.weight[self.hidden_size:2*self.hidden_size, :])
+            fused_qkv = self.query_key_value(hidden_states) 
+            fused_qkv = fused_qkv[:, :, 2*self.hidden_size:3*self.hidden_size]
+            fused_qkv = torch.cat((q_hidden_states, k_hidden_states, fused_qkv), -1)
 
-        fused_qkv = self.query_key_value(hidden_states)  # [batch_size, seq_length, 3 x hidden_size]
+        if not self.config.mha_only and not self.config.qk_only and not self.config.ov_only:
+            fused_qkv = self.query_key_value(hidden_states)  # [batch_size, seq_length, 3 x hidden_size]
 
         # 3 x [batch_size, seq_length, num_heads, head_dim]
         (query_layer, key_layer, value_layer) = self._split_heads(fused_qkv)
@@ -1116,7 +1134,7 @@ class CustomBloomAttention(BloomAttention):
 
         # aggregate results across tp ranks. See here: https://github.com/pytorch/pytorch/issues/76232
         if self.pretraining_tp > 1 and self.slow_but_exact:
-            if self.training and not self.config.ffn_only:
+            if not self.config.ffn_only:
                 context_layer = project_to_subspaces(context_layer, *dense_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
             slices = self.hidden_size / self.pretraining_tp
             output_tensor = torch.zeros_like(context_layer)
@@ -1126,7 +1144,7 @@ class CustomBloomAttention(BloomAttention):
                     self.dense.weight[:, int(i * slices) : int((i + 1) * slices)],
                 )
         else:
-            if self.training and not self.config.ffn_only:
+            if not self.config.ffn_only:
                 context_layer = project_to_subspaces(context_layer, *dense_base, use_repurposed_dims=self.config.use_repurposed_dims, step_size=self.config.step_size, i_task=i_task)
             output_tensor = self.dense(context_layer)
 
@@ -1199,7 +1217,9 @@ class CustomBloomBlock(BloomBlock):
             alibi=alibi,
             head_mask=head_mask,
             use_cache=use_cache,
-            output_attentions=output_attentions)
+            output_attentions=output_attentions,
+            projection_config=projection_config,
+            i_task=i_task)
 
         attention_output = attn_outputs[0]
 
@@ -1214,10 +1234,9 @@ class CustomBloomBlock(BloomBlock):
             residual = attention_output
 
         # MLP.
-        if self.training:
-            output = self.mlp(layernorm_output, residual, projection_config, i_task=i_task)
-        else:
-            output = self.mlp(layernorm_output, residual)
+        
+        output = self.mlp(layernorm_output, residual, projection_config, i_task=i_task)
+        
 
         if use_cache:
             outputs = (output,) + outputs
@@ -1248,6 +1267,8 @@ class CustomBloomModel(BloomModel):
 
         # Initialize weights and apply final processing
         self.post_init()
+        self.i_task = None
+        self.projection_configs = None
 
     def build_alibi_tensor(self, attention_mask: torch.Tensor, num_heads: int, dtype: torch.dtype) -> torch.Tensor:
         return build_alibi_tensor(attention_mask, num_heads, dtype)
@@ -1288,6 +1309,12 @@ class CustomBloomModel(BloomModel):
             )
         if len(deprecated_arguments) > 0:
             raise ValueError(f"Got unexpected arguments: {deprecated_arguments}")
+
+
+        if self.i_task is not None:
+            i_task = self.i_task
+        if self.projection_configs is not None:
+            projection_configs = self.projection_configs
 
         output_attentions = output_attentions if output_attentions is not None else self.config.output_attentions
         output_hidden_states = (
@@ -1354,12 +1381,10 @@ class CustomBloomModel(BloomModel):
         for i, (block, layer_past) in enumerate(zip(self.h, past_key_values)):
             if output_hidden_states:
                 all_hidden_states = all_hidden_states + (hidden_states,)
-
+            
+            query_key_value_bases, dense_bases, dense_h_to_4h_bases, dense_4h_to_h_bases = projection_configs
+            projection_config = (query_key_value_bases[i], dense_bases[i], dense_h_to_4h_bases[i], dense_4h_to_h_bases[i])
             if self.gradient_checkpointing and self.training:
-                # TODO: get configs for bloom
-                query_key_value_bases, dense_bases, dense_h_to_4h_bases, dense_4h_to_h_bases = projection_configs
-                projection_config = (query_key_value_bases[i], dense_bases[i], dense_h_to_4h_bases[i], dense_4h_to_h_bases[i])
-
                 outputs = self._gradient_checkpointing_func(
                     block.__call__,
                     hidden_states,
@@ -1381,6 +1406,8 @@ class CustomBloomModel(BloomModel):
                     use_cache=use_cache,
                     output_attentions=output_attentions,
                     alibi=alibi,
+                    projection_config=projection_config,
+                    i_task=i_task
                 )
 
             hidden_states = outputs[0]

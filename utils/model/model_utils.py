@@ -29,7 +29,7 @@ def create_hf_model(model_class,
     #print(model_config)
     if args is not None:
         print('we assign the flags and step size etc....')
-        if args.CL_method == 'SVD' or args.CL_method == 'svd_replay':
+        if args.CL_method == 'SVD' or args.CL_method == 'svd_replay' or args.CL_method == 'svd_replay_alignment':
             model_config.use_repurposed_dims = args.use_repurposed_dims
             print('foooooooooooooo')
             print(args.ffn_only)
@@ -193,6 +193,87 @@ def project_to_subspaces(input_tensor: torch.Tensor, basis: torch.tensor,
     # Reshape back to [batch_size, sequence_length, hidden_size, ...]
     return edit_tensors.view(batch_size, sequence_length, hidden_size)
 
+
+def project_to_subspaces_bloom_qkv(input_tensor: torch.Tensor, basis: torch.tensor, 
+                         repurposed_directions: torch.tensor, base_directions: torch.tensor,
+                         step_size=None, use_repurposed_dims=True, i_task=0):
+    
+    if input_tensor.dim() == 2:
+        input_tensor = input_tensor.unsqueeze(dim=0)
+
+    batch_size, sequence_length, hidden_size = input_tensor.shape
+    _, base_3_hidden_size = base_directions.shape
+    _, repurposed_3_hidden_size = repurposed_directions.shape
+    #print('base 3hidden size', base_3_hidden_size)
+    #print('repurposed_3_hidden_size', repurposed_3_hidden_size)
+    base_hidden_size = base_3_hidden_size // 3
+    repurposed_hidden_size = repurposed_3_hidden_size // 3
+    #print('base_hidden_size', base_hidden_size)
+    #print('repurposed_hidden_size', repurposed_hidden_size)
+    #print('input tensor shape', input_tensor.shape)
+    reshaped_tensor = input_tensor.view(-1, hidden_size)
+    #print('reshaped tensor shape', reshaped_tensor.shape)
+    #print('base direction shape', base_directions.shape)
+    #print('repurposed directions shape', repurposed_directions.shape)
+    q_base_directions = base_directions[:, :base_hidden_size]
+    q_repurposed_directions = repurposed_directions[:, :repurposed_hidden_size]
+
+    k_base_directions = base_directions[:, base_hidden_size:2*base_hidden_size]
+    k_repurposed_directions = repurposed_directions[:, repurposed_hidden_size:2*repurposed_hidden_size]
+
+    v_base_directions = base_directions[:, 2*base_hidden_size:3*base_hidden_size]
+    v_repurposed_directions = repurposed_directions[:, 2*repurposed_hidden_size:3*repurposed_hidden_size]
+    
+    q_projected_tensor = reshaped_tensor @ q_base_directions
+    q_base_tensor = q_projected_tensor @ q_base_directions.T
+    
+    k_projected_tensor = reshaped_tensor @ k_base_directions
+    k_base_tensor = k_projected_tensor @ k_base_directions.T
+    
+    v_projected_tensor = reshaped_tensor @ v_base_directions
+    v_base_tensor = v_projected_tensor @ v_base_directions.T
+    
+    #print('base tensor shapes after projection', q_base_tensor.shape, k_base_tensor.shape, v_base_tensor.shape)
+    if step_size is None:
+        # Reshape back to original dimensions and return
+        #print('qkv base tensor shapes', q_base_tensor.shape, k_base_tensor.shape, v_base_tensor.shape)
+        base_tensor = torch.cat((q_base_tensor, k_base_tensor, v_base_tensor), 1)
+        #print('base tensor shape', base_tensor.shape)
+        return base_tensor.view(batch_size, sequence_length, -1)
+
+    if isinstance(step_size, float) or isinstance(step_size, int):
+        step_size = torch.tensor([step_size]).to(input_tensor.device)
+    
+    random.seed(i_task)
+    #print(q_repurposed_directions.shape)
+    #print(k_repurposed_directions.shape)
+    #print(v_repurposed_directions.shape)
+    q_random_direction = random.randint(0, q_repurposed_directions.shape[1]-1)
+    k_random_direction = random.randint(0, k_repurposed_directions.shape[1]-1)
+    v_random_direction = random.randint(0, v_repurposed_directions.shape[1]-1)
+
+    q_repurposed_direction = q_repurposed_directions[:, q_random_direction]
+    k_repurposed_direction = k_repurposed_directions[:, k_random_direction]
+    v_repurposed_direction = v_repurposed_directions[:, v_random_direction]
+
+    if step_size.dim() == 1:
+        q_edits = step_size * q_repurposed_direction
+        k_edits = step_size * k_repurposed_direction
+        v_edits = step_size * v_repurposed_direction
+    else:
+        raise NotImplementedError('Cannot edit with these values')
+
+    q_edit_tensors = q_base_tensor + q_edits
+    k_edit_tensors = k_base_tensor + k_edits
+    v_edit_tensors = v_base_tensor + v_edits
+    #print('edit tensor shapes', q_edit_tensors.shape, k_edit_tensors.shape, v_edit_tensors.shape)
+    #edit_tensors = torch.cat((q_edit_tensors, k_edit_tensors, v_edit_tensors), 1)
+    #print('edit tensor shape', edit_tensors.shape)
+
+    #return edit_tensors.view(batch_size, sequence_length, 3*hidden_size)
+    return q_edit_tensors.view(batch_size, sequence_length, hidden_size), k_edit_tensors.view(batch_size, sequence_length, hidden_size), v_edit_tensors.view(batch_size, sequence_length, hidden_size)
+
+
 def projection_pipeline(input_tensor, layer):
     basis = get_latent_directions_module(layer)
     repurposed_dims_size = 100
@@ -338,16 +419,34 @@ def generate_basis_for_bloom(model, repurpose_dim_size):
         #param = param.to('cuda')
         if 'query_key_value.weight' in name:
             print(name, param)
-            hidden_size = param.shape[1]
+            print(param.shape)
+            hidden_size = param.shape[1] 
             repurposed_dims = torch.arange(hidden_size - repurpose_dim_size, hidden_size)
             base_dims = torch.tensor([x for x in range(hidden_size) if x not in repurposed_dims])
-            basis = get_latent_directions_module(param)
-            v = basis[:, base_dims]
-            repurposed_directions = basis[:, repurposed_dims]
-            base_directions = basis[:, base_dims]
+
+            q_layer = param[:hidden_size, :]
+            k_layer = param[hidden_size:2*hidden_size, :]
+            v_layer = param[2*hidden_size:3*hidden_size, :]
+
+            print(q_layer.shape, k_layer.shape, v_layer.shape)
+            
+            q_basis = get_latent_directions_module(q_layer)
+            q_repurposed_directions = q_basis[:, repurposed_dims]
+            q_base_directions = q_basis[:, base_dims]
+
+            k_basis = get_latent_directions_module(k_layer)
+            k_repurposed_directions = k_basis[:, repurposed_dims]
+            k_base_directions = k_basis[:, base_dims]       
+
+            v_basis = get_latent_directions_module(v_layer)
+            v_repurposed_directions = v_basis[:, repurposed_dims]
+            v_base_directions = v_basis[:, base_dims]
             #v = v.to('cuda')
             #base_directions = v @ v.T
             #base_directions = base_directions.to('cpu')
+            basis = torch.cat((q_basis, k_basis, v_basis), 1)
+            repurposed_directions = torch.cat((q_repurposed_directions, k_repurposed_directions, v_repurposed_directions), 1)
+            base_directions = torch.cat((q_base_directions, k_base_directions, v_base_directions), 1)
             query_key_value_bases.append((basis, repurposed_directions, base_directions))
         elif 'dense.weight' in name:
             print(name, param)
@@ -355,7 +454,7 @@ def generate_basis_for_bloom(model, repurpose_dim_size):
             repurposed_dims = torch.arange(hidden_size - repurpose_dim_size, hidden_size)
             base_dims = torch.tensor([x for x in range(hidden_size) if x not in repurposed_dims])
             basis = get_latent_directions_module(param)
-            v = basis[:, base_dims]
+            #v = basis[:, base_dims]
             repurposed_directions = basis[:, repurposed_dims]
             base_directions = basis[:, base_dims]
             #v = v.to('cuda')
@@ -368,7 +467,7 @@ def generate_basis_for_bloom(model, repurpose_dim_size):
             repurposed_dims = torch.arange(hidden_size - repurpose_dim_size, hidden_size)
             base_dims = torch.tensor([x for x in range(hidden_size) if x not in repurposed_dims])
             basis = get_latent_directions_module(param)
-            v = basis[:, base_dims]
+            #v = basis[:, base_dims]
             repurposed_directions = basis[:, repurposed_dims]
             base_directions = basis[:, base_dims]
             #v = v.to('cuda')
@@ -381,7 +480,7 @@ def generate_basis_for_bloom(model, repurpose_dim_size):
             repurposed_dims = torch.arange(hidden_size - repurpose_dim_size, hidden_size)
             base_dims = torch.tensor([x for x in range(hidden_size) if x not in repurposed_dims])
             basis = get_latent_directions_module(param)
-            v = basis[:, base_dims]
+            #v = basis[:, base_dims]
             repurposed_directions = basis[:, repurposed_dims]
             base_directions = basis[:, base_dims]
             #v = v.to('cuda')
@@ -389,8 +488,6 @@ def generate_basis_for_bloom(model, repurpose_dim_size):
             #base_directions = base_directions.to('cpu')
             dense_4h_to_h_bases.append((basis, repurposed_directions, base_directions))
     return (query_key_value_bases, dense_bases, dense_h_to_4h_bases, dense_4h_to_h_bases)
-
-
 
 
 def generate_basis_for_phi(model, repurpose_dim_size):

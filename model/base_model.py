@@ -104,6 +104,131 @@ class CL_Base_Model:
             # print_rank_0(f"ppl: {perplexity}", self.args.global_rank)
             # self.model.tput_timer.update_epoch_count()
 
+    def train_one_task_record_grad(self, task, i_task, epochs):
+        gradient_data = {}
+
+        def save_gradients(name):
+            def hook(grad):
+                if name not in gradient_data:
+                    gradient_data[name] = grad
+                else:
+                    #print('grad shape', grad.shape)
+                    gradient_data[name] = gradient_data[name] + grad
+            return hook
+
+        for name, module in self.model.named_modules():
+            if isinstance(module, torch.nn.Linear):
+                module.weight.register_hook(save_gradients(name + "_weight"))
+                #module.bias.register_hook(save_gradients(name + "_bias"))
+
+        # 在单独某个任务上训练
+        if self.args.local_rank == -1:
+            device = torch.device("cuda")
+        else:
+            torch.cuda.set_device(self.args.local_rank)
+            device = torch.device("cuda", self.args.local_rank)
+        
+        #### TRAIN ####
+        train_dataloader = self.train_task_list[task]
+        eval_dataloader = self.eval_task_list[task]
+        total_steps = epochs * len(train_dataloader)
+        progress_bar = tqdm(total=total_steps, leave=True, disable=(self.args.global_rank != 0))
+        for epoch in range(epochs):
+            print_rank_0(
+                f"Beginning of Epoch {epoch+1}/{epochs}, Total Micro Batches {len(train_dataloader)}",
+                self.args.global_rank)
+            self.model.train()
+
+            for step, batch in enumerate(train_dataloader):
+                del batch['sources']
+                batch = to_device(batch, device)
+                outputs = self.model(**batch, use_cache=False)
+                loss = outputs.loss
+                # Update the description to include current step and loss, if needed
+                if self.args.global_rank == 0:
+                    # Update the progress bar
+                    progress_bar.update(1)
+                    description = f"Epoch {epoch+1}, Step {step}, Loss: {loss.item():.4f}"
+                    progress_bar.set_description(description, refresh=False)
+
+                self.model.backward(loss)
+                # Correct gradient accumulation steps are handled withing the deepspeed engine's backward call.
+                self.model.step()
+
+        avg_gradients = {name: grad / total_steps for name, grad in gradient_data.items()}
+        
+        grad_filename = os.path.join(self.args.output_dir, f"avg_gradients_{i_task}.pt")
+        #avg_gradients_serializable = {key: value.tolist() for key, value in avg_gradients.items()}
+        torch.save(avg_gradients, grad_filename)
+        # Save to disk using JSON
+        #with open(json_filename, 'w') as f:
+        #    json.dump(avg_gradients_serializable, f, indent=4)
+        
+        print("Average gradients saved to", f"avg_gradients_{i_task}.pt")
+            
+            
+    def train_one_task_projection_record_grad(self, task, i_task, epochs, projection_configs):
+        gradient_data = {}
+
+        def save_gradients(name):
+            def hook(grad):
+                if name not in gradient_data:
+                    gradient_data[name] = grad
+                else:
+                    #print('grad shape', grad.shape)
+                    gradient_data[name] = gradient_data[name] + grad
+            return hook
+
+        for name, module in self.model.named_modules():
+            if isinstance(module, torch.nn.Linear):
+                module.weight.register_hook(save_gradients(name + "_weight"))
+                #module.bias.register_hook(save_gradients(name + "_bias"))
+
+        if self.args.local_rank == -1:
+            device = torch.device("cuda")
+        else:
+            torch.cuda.set_device(self.args.local_rank)
+            device = torch.device("cuda", self.args.local_rank)
+        
+        #### TRAIN ####
+        train_dataloader = self.train_task_list[task]
+        eval_dataloader = self.eval_task_list[task]
+        total_steps = epochs * len(train_dataloader)
+        progress_bar = tqdm(total=total_steps, leave=True, disable=(self.args.global_rank != 0))
+        for epoch in range(epochs):
+            print_rank_0(
+                f"Beginning of Epoch {epoch+1}/{epochs}, Total Micro Batches {len(train_dataloader)}",
+                self.args.global_rank)
+            self.model.train()
+
+            for step, batch in enumerate(train_dataloader):
+                del batch['sources']
+                batch = to_device(batch, device)
+                outputs = self.model(**batch, projection_configs=projection_configs, use_cache=False, i_task=i_task)
+                loss = outputs.loss
+                # Update the description to include current step and loss, if needed
+                if self.args.global_rank == 0:
+                    # Update the progress bar
+                    progress_bar.update(1)
+                    description = f"Epoch {epoch+1}, Step {step}, Loss: {loss.item():.4f}"
+                    progress_bar.set_description(description, refresh=False)
+
+                self.model.backward(loss)
+                # Correct gradient accumulation steps are handled withing the deepspeed engine's backward call.
+                self.model.step()
+
+        avg_gradients = {name: grad / total_steps for name, grad in gradient_data.items()}
+        
+        grad_filename = os.path.join(self.args.output_dir, f"avg_gradients_{i_task}.pt")
+        #avg_gradients_serializable = {key: value.tolist() for key, value in avg_gradients.items()}
+        torch.save(avg_gradients, grad_filename)
+        # Save to disk using JSON
+        #with open(json_filename, 'w') as f:
+        #    json.dump(avg_gradients_serializable, f, indent=4)
+        
+        print("Average gradients saved to", f"avg_gradients_{i_task}.pt")
+
+
     def train_one_task_projection(self, task, i_task, epochs, projection_configs):
         
         # 在单独某个任务上训练
@@ -149,7 +274,17 @@ class CL_Base_Model:
             # print_rank_0(f"ppl: {perplexity}", self.args.global_rank)
             # self.model.tput_timer.update_epoch_count()
     
-    
+    def train_continual_record_grad(self):
+        for i_task, task in enumerate(self.train_task_list):
+            self.train_one_task_record_grad(task, i_task, int(self.args.num_train_epochs[i_task]))
+            self.save_model(i_task)
+
+    def train_continual_projection_record_grad(self, projection_configs):
+        for i_task, task in enumerate(self.train_task_list):
+            self.train_one_task_projection_record_grad(task, i_task, int(self.args.num_train_epochs[i_task]), projection_configs)
+            self.save_model(i_task)
+
+
     def train_continual_projection(self, projection_configs):
         for i_task, task in enumerate(self.train_task_list):
             self.train_one_task_projection(task, i_task, int(self.args.num_train_epochs[i_task]), projection_configs)

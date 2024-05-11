@@ -49,7 +49,7 @@ class L2P(CL_Base_Model):
     
     def __init__(self, model, tokenizer, optimizer, train_task_list, eval_task_list, test_task_list, args,
                  embedding_key='mean',
-                 top_k=3,
+                 top_k=5,
                  batchwise_prompt=False,
                  pull_constraint_coeff=0.5
                  ):

@@ -64,6 +64,9 @@ from model.CustomPhiForCausalLM import CustomPhiForCausalLM
 
 # TODO, check support for OPT and llama
 
+torch.set_num_threads(2)
+
+
 def str2bool(v):
     if isinstance(v, bool):
         return v
@@ -248,6 +251,10 @@ def parse_args():
     parser.add_argument('--project_only_first_layer',
                         type=str2bool,
                         help='Project only first transformer block. Set this flag if you want to enable it.')
+    parser.add_argument('--record_grad',
+                        type=str2bool,
+                        help='record the average gradient during finetuning for SVD projection method.')
+
     print('here is parser')
     print(parser)
     parser = deepspeed.add_config_arguments(parser)
@@ -549,10 +556,12 @@ def main():
             model = convert_PP_model(model, args)
             
         elif args.CL_method=="L2P":
-            #args.pool_size = 10
-            #args.prompt_length = 5
             args.pool_size = 40
             args.prompt_length = 20
+            print('pool size', args.pool_size)
+            print('prompt length', args.prompt_length)
+            #args.pool_size = 20
+            #args.prompt_length = 10
             args.prompt_init = "uniform"
             model = convert_L2P_model(model, args)
             for name, params in model.named_parameters():
@@ -600,9 +609,16 @@ def main():
     # Now projection_configs_updated contains tensors that are all on the same device as the model
 
     #projection_configs = None
-    if args.CL_method in Method2Class.keys() and args.CL_method == 'SVD' :
+    if args.CL_method in Method2Class.keys() and args.CL_method == 'SVD' and not args.record_grad:
         CL_Trainer = Method2Class[args.CL_method](model, tokenizer, optimizer, train_task_list, eval_task_list, test_task_list, args)
         CL_Trainer.train_continual_projection(projection_configs)
+    elif args.CL_method in Method2Class.keys() and args.CL_method == 'SVD' and args.record_grad:
+        CL_Trainer = Method2Class[args.CL_method](model, tokenizer, optimizer, train_task_list, eval_task_list, test_task_list, args)
+        CL_Trainer.train_continual_projection_record_grad(projection_configs)
+    elif args.CL_method in Method2Class.keys() and args.CL_method == 'base' and args.record_grad:
+        print('save avg grad')
+        CL_Trainer = Method2Class[args.CL_method](model, tokenizer, optimizer, train_task_list, eval_task_list, test_task_list, args)
+        CL_Trainer.train_continual_record_grad()
     else:
         CL_Trainer = Method2Class[args.CL_method](model, tokenizer, optimizer, train_task_list, eval_task_list, test_task_list, args)
         CL_Trainer.train_continual()
