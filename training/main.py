@@ -40,7 +40,15 @@ from utils.data.data_collator import DataCollator
 from utils.utils import print_rank_0, to_device, save_hf_format, set_random_seed, get_all_reduce_mean, get_optimizer_grouped_parameters, save_zero_three_model, load_hf_tokenizer
 from utils.ds_utils import get_train_ds_config
 from utils.module.lora import convert_linear_layer_to_lora, convert_lora_to_linear_layer, only_optimize_lora_parameters
-from utils.model.model_utils import create_hf_model, get_latent_directions, generate_basis_pipeline, generate_basis_for_opt, generate_basis_for_bloom, generate_basis_for_phi
+from utils.model.model_utils import (
+    create_hf_model, 
+    get_latent_directions, 
+    generate_basis_pipeline, 
+    generate_basis_for_opt, 
+    generate_basis_for_bloom, 
+    generate_basis_for_phi,
+    generate_basis_for_gpt2
+)
 
 # add flash attention
 from utils.flash_attention.llama_flash_att import replace_llama_attn_with_flash_attn
@@ -60,7 +68,8 @@ from params import Method2Class, AllDatasetName
 from model.CustomLlamaForCausalLM import CustomLlamaForCausalLM
 from model.CustomOPTForCausalLM import CustomOPTForCausalLM
 from model.CustomBloomForCausalLM import CustomBloomForCausalLM
-from model.CustomPhiForCausalLM import CustomPhiForCausalLM
+#from model.CustomPhiForCausalLM import CustomPhiForCausalLM
+from model.CustomGPT import CustomGPT2LMHeadModel
 
 # TODO, check support for OPT and llama
 
@@ -338,6 +347,14 @@ def main():
                                     disable_dropout=args.disable_dropout,
                                     args=args
                                     )
+        elif 'gpt2' in args.model_name_or_path:
+            model = create_hf_model(CustomGPT2LMHeadModel,
+                                    args.model_name_or_path,
+                                    tokenizer,
+                                    ds_config=ds_config,
+                                    disable_dropout=args.disable_dropout,
+                                    args=args
+                                    )
         repurposed_dims_size = args.repurpose_dim_size
         projection_configs = None
         PROJ_CONFIG_PATH = args.proj_config_path + args.model + '_' + str(args.repurpose_dim_size) + '_pca' + '_proj_config.pkl'
@@ -350,6 +367,8 @@ def main():
                 projection_configs = generate_basis_for_bloom(model, repurposed_dims_size)
             elif 'phi' in args.model_name_or_path:
                 projection_configs = generate_basis_for_phi(model, repurposed_dims_size)
+            elif 'gpt2' in args.model_name_or_path:
+                projection_configs = generate_basis_for_gpt2(model, repurposed_dims_size)
             with open(PROJ_CONFIG_PATH, 'wb') as f:
                 pickle.dump(projection_configs, f)
             print("projection configs has been pickled and saved to disk.")
@@ -488,7 +507,6 @@ def main():
         eval_task_list[dataset] = eval_dataloader
         test_task_list[dataset] = test_dataloader
 
-
     def evaluation(model, eval_dataloader):
         model.eval()
         losses = 0
@@ -556,8 +574,8 @@ def main():
             model = convert_PP_model(model, args)
             
         elif args.CL_method=="L2P":
-            args.pool_size = 40
-            args.prompt_length = 20
+            args.pool_size = 10
+            args.prompt_length = 5
             print('pool size', args.pool_size)
             print('prompt length', args.prompt_length)
             #args.pool_size = 20
