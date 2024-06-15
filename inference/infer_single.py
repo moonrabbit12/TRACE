@@ -46,7 +46,7 @@ from utils.utils import print_rank_0, to_device, save_hf_format, set_random_seed
     get_optimizer_grouped_parameters, save_zero_three_model, load_hf_tokenizer
 from utils.ds_utils import get_train_ds_config
 from utils.model.model_utils import create_hf_model
-from evaluations import eval_ScienceQA, eval_MeetingBank, eval_PapyrusF, eval_CStance, eval_Py150, eval_FOMC, eval_NumGLUE_cm, eval_NumGLUE_ds, eval_20Minuten # to be continued
+from evaluations import eval_ScienceQA, eval_MeetingBank, eval_PapyrusF, eval_CStance, eval_Py150, eval_FOMC, eval_NumGLUE_cm, eval_NumGLUE_ds, eval_20Minuten, eval_ag, eval_amazon, eval_yahoo, eval_db # to be continued
 from training.params import Method2Class, AllDatasetName
 
 from model.Replay.LFPT5 import getInitialPrompt
@@ -439,6 +439,14 @@ def main():
                     evaluation_result = eval_NumGLUE_ds.eval(predicted_sequences, ground_truths)
                 elif inference_task == "20Minuten":
                     evaluation_result = eval_20Minuten.eval(sources_sequences, predicted_sequences, ground_truths)
+                elif inference_task == "ag":
+                    evaluation_result = eval_ag.eval(predicted_sequences, ground_truths)
+                elif inference_task == "amazon":
+                    evaluation_result = eval_amazon.eval(predicted_sequences, ground_truths)
+                elif inference_task == "db":
+                    evaluation_result = eval_db.eval(predicted_sequences, ground_truths)
+                elif inference_task == "yahoo":
+                    evaluation_result = eval_yahoo.eval(predicted_sequences, ground_truths)
                 else:
                     evaluation_result = {}
             except Exception as e:
