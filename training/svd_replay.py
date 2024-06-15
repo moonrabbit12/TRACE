@@ -42,7 +42,7 @@ from utils.data.data_collator import DataCollator
 from utils.utils import print_rank_0, to_device, save_hf_format, set_random_seed, get_all_reduce_mean, get_optimizer_grouped_parameters, save_zero_three_model, load_hf_tokenizer
 from utils.ds_utils import get_train_ds_config
 from utils.module.lora import convert_linear_layer_to_lora, convert_lora_to_linear_layer, only_optimize_lora_parameters
-from utils.model.model_utils import create_hf_model, generate_basis_for_bloom, generate_basis_for_opt
+from utils.model.model_utils import create_hf_model, generate_basis_for_bloom, generate_basis_for_opt, generate_basis_for_gpt2
 
 # add flash attention
 from utils.flash_attention.llama_flash_att import replace_llama_attn_with_flash_attn
@@ -62,6 +62,10 @@ from params import Method2Class, AllDatasetName
 from model.CustomLlamaForCausalLM import CustomLlamaForCausalLM
 from model.CustomOPTForCausalLM import CustomOPTForCausalLM
 from model.CustomBloomForCausalLM import CustomBloomForCausalLM
+from model.CustomGPT import CustomGPT2LMHeadModel
+
+torch.set_num_threads(2)
+
 
 class ShuffledHomogeneousBatchSampler(Sampler):
     def __init__(self, concat_dataset, batch_size):
@@ -193,6 +197,10 @@ def parse_args():
                         type=list_of_strings,
                         default=None,
                         help="Total number of training epochs to perform.")
+    parser.add_argument("--repurpose_direction_list",
+                        type=list_of_strings,
+                        default=None,
+                        help="Indices of singular vectors to repurpose.")
     parser.add_argument(
         "--gradient_accumulation_steps",
         type=int,
@@ -368,6 +376,14 @@ def main():
                                 disable_dropout=args.disable_dropout,
                                 args=args
                                 )
+    elif 'gpt2' in args.model_name_or_path:
+        model = create_hf_model(CustomGPT2LMHeadModel,
+                                args.model_name_or_path,
+                                tokenizer,
+                                ds_config=ds_config,
+                                disable_dropout=args.disable_dropout,
+                                args=args
+                                )
     else:
         model = create_hf_model(AutoModelForCausalLM,
                                 args.model_name_or_path,
@@ -388,6 +404,8 @@ def main():
             projection_configs = generate_basis_for_bloom(model, repurposed_dims_size)
         elif 'phi' in args.model_name_or_path:
             projection_configs = generate_basis_for_phi(model, repurposed_dims_size)
+        elif 'gpt2' in args.model_name_or_path:
+            projection_configs = generate_basis_for_gpt2(model, repurposed_dims_size)
         with open(PROJ_CONFIG_PATH, 'wb') as f:
             pickle.dump(projection_configs, f)
         print("projection configs has been pickled and saved to disk.")
